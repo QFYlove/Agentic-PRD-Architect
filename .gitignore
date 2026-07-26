@@ -1,0 +1,28 @@
+# Frontend
+node_modules/
+dist/
+.astro/
+.npm-cache/
+.pip-cache/
+coverage/
+playwright-report/
+test-results/
+
+# Backend
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local configuration
+.env
+.env.local
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+debug.log

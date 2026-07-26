@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.astro/
+.npm-cache/
+.pip-cache/
+.venv/
+.pytest_cache/
+**/__pycache__/
+coverage/
+PRD.md
+AGENTS.md
+memory-bank/

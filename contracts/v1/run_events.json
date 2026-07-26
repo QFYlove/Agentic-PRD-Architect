@@ -1,0 +1,138 @@
+[
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 1,
+    "event": "run_started",
+    "timestamp": "2026-07-26T10:00:01Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 2,
+    "event": "status_changed",
+    "timestamp": "2026-07-26T10:00:02Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 3,
+    "event": "node_started",
+    "timestamp": "2026-07-26T10:00:03Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 4,
+    "event": "prd_delta",
+    "timestamp": "2026-07-26T10:00:04Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 5,
+    "event": "prd_stream_reset",
+    "timestamp": "2026-07-26T10:00:05Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 6,
+    "event": "prd_generated",
+    "timestamp": "2026-07-26T10:00:06Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 7,
+    "event": "review_completed",
+    "timestamp": "2026-07-26T10:00:07Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 8,
+    "event": "scores_updated",
+    "timestamp": "2026-07-26T10:00:08Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 9,
+    "event": "revision_planned",
+    "timestamp": "2026-07-26T10:00:09Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 10,
+    "event": "pause_requested",
+    "timestamp": "2026-07-26T10:00:10Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 11,
+    "event": "run_paused",
+    "timestamp": "2026-07-26T10:00:11Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 12,
+    "event": "run_resumed",
+    "timestamp": "2026-07-26T10:00:12Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 13,
+    "event": "telemetry_updated",
+    "timestamp": "2026-07-26T10:00:13Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 14,
+    "event": "run_completed",
+    "timestamp": "2026-07-26T10:00:14Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 15,
+    "event": "max_iterations_reached",
+    "timestamp": "2026-07-26T10:00:15Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 16,
+    "event": "run_cancelled",
+    "timestamp": "2026-07-26T10:00:16Z",
+    "iteration": 1,
+    "payload": {}
+  },
+  {
+    "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+    "sequence": 17,
+    "event": "run_failed",
+    "timestamp": "2026-07-26T10:00:17Z",
+    "iteration": 1,
+    "payload": {}
+  }
+]

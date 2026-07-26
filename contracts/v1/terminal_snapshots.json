@@ -1,0 +1,93 @@
+[
+  {
+    "run_id": "00000000-0000-4000-8000-000000000001",
+    "user_idea": "A completed product idea fixture.",
+    "current_iteration": 2,
+    "max_iterations": 3,
+    "quality_threshold": 85,
+    "status": "COMPLETED",
+    "versions": [],
+    "current_prd": "# Completed PRD",
+    "node_statuses": {},
+    "total_tokens": {
+      "input_tokens": 100,
+      "output_tokens": 200,
+      "total_tokens": 300
+    },
+    "estimated_cost_usd": null,
+    "created_at": "2026-07-26T10:00:00Z",
+    "updated_at": "2026-07-26T10:05:00Z",
+    "completed_at": "2026-07-26T10:05:00Z",
+    "latest_event_sequence": 20
+  },
+  {
+    "run_id": "00000000-0000-4000-8000-000000000002",
+    "user_idea": "A maximum iteration product idea fixture.",
+    "current_iteration": 3,
+    "max_iterations": 3,
+    "quality_threshold": 95,
+    "status": "MAX_ITERATIONS_REACHED",
+    "versions": [],
+    "current_prd": "# Best available PRD",
+    "node_statuses": {},
+    "total_tokens": {
+      "input_tokens": 150,
+      "output_tokens": 300,
+      "total_tokens": 450
+    },
+    "estimated_cost_usd": null,
+    "created_at": "2026-07-26T10:00:00Z",
+    "updated_at": "2026-07-26T10:10:00Z",
+    "completed_at": "2026-07-26T10:10:00Z",
+    "latest_event_sequence": 30
+  },
+  {
+    "run_id": "00000000-0000-4000-8000-000000000003",
+    "user_idea": "A cancelled product idea fixture.",
+    "current_iteration": 1,
+    "max_iterations": 3,
+    "quality_threshold": 85,
+    "status": "CANCELLED",
+    "versions": [],
+    "current_prd": "",
+    "node_statuses": {},
+    "total_tokens": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "total_tokens": 0
+    },
+    "estimated_cost_usd": null,
+    "created_at": "2026-07-26T10:00:00Z",
+    "updated_at": "2026-07-26T10:01:00Z",
+    "completed_at": "2026-07-26T10:01:00Z",
+    "latest_event_sequence": 4
+  },
+  {
+    "run_id": "00000000-0000-4000-8000-000000000004",
+    "user_idea": "A failed product idea fixture.",
+    "current_iteration": 1,
+    "max_iterations": 3,
+    "quality_threshold": 85,
+    "status": "FAILED",
+    "versions": [],
+    "current_prd": "",
+    "node_statuses": {
+      "generator": "FAILED"
+    },
+    "total_tokens": {
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "total_tokens": 0
+    },
+    "estimated_cost_usd": null,
+    "created_at": "2026-07-26T10:00:00Z",
+    "updated_at": "2026-07-26T10:01:00Z",
+    "completed_at": "2026-07-26T10:01:00Z",
+    "error": {
+      "code": "GENERATOR_FAILED",
+      "message": "The generator could not complete.",
+      "retryable": false
+    },
+    "latest_event_sequence": 5
+  }
+]

@@ -1,0 +1,7 @@
+{
+  "user_idea": "Build a micro-subscription feature for a podcast app.",
+  "target_audience": "Podcast listeners and independent creators",
+  "user_constraints": "Focus on a mobile-first MVP",
+  "quality_threshold": 85,
+  "max_iterations": 3
+}

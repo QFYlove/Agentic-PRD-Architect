@@ -1,0 +1,11 @@
+{
+  "run_id": "0c98322f-51a5-47f0-8091-d8152df0e680",
+  "sequence": 1,
+  "event": "status_changed",
+  "timestamp": "2026-07-26T10:00:01Z",
+  "iteration": 1,
+  "payload": {
+    "previous": "QUEUED",
+    "current": "GENERATING"
+  }
+}

@@ -1,0 +1,26 @@
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["backend/tests"]
+filterwarnings = [
+  "ignore:The default value of `allowed_objects` will change.*:langchain_core._api.deprecation.LangChainPendingDeprecationWarning",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+src = ["backend"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["backend"]
+exclude = ["backend/tests"]
+
+[[tool.mypy.overrides]]
+module = ["langgraph.*", "sse_starlette.*"]
+ignore_missing_imports = true
