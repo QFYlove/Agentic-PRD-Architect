@@ -1,5 +1,7 @@
 # Agentic PRD Architect
 
+**English** | [简体中文](docs/README_ZH.md)
+
 Agentic PRD Architect turns a product idea into a versioned, reviewed PRD. A
 FastAPI/LangGraph backend runs a Generator, three parallel Reviewers,
 deterministic score aggregation, and an Optimizer. The Astro/React frontend
