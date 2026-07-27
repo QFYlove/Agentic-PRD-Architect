@@ -124,6 +124,34 @@ describe("HttpAgentApi", () => {
     await expect(api.getRun(RUN_ID)).resolves.toMatchObject({ run_id: RUN_ID });
   });
 
+  it("parses the persisted run list", async () => {
+    const api = new HttpAgentApi(
+      "http://api.test",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse({
+          items: [
+            {
+              run_id: RUN_ID,
+              user_idea: "A persisted product conversation.",
+              status: "COMPLETED",
+              current_iteration: 2,
+              max_iterations: 3,
+              latest_score: 88,
+              created_at: "2026-07-26T10:00:00Z",
+              updated_at: "2026-07-26T10:05:00Z",
+            },
+          ],
+          total: 1,
+        }),
+      ),
+    );
+
+    await expect(api.listRuns()).resolves.toMatchObject({
+      total: 1,
+      items: [{ run_id: RUN_ID }],
+    });
+  });
+
   it("constructs all control and health endpoints", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

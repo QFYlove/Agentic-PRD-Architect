@@ -61,10 +61,12 @@ for (const stage of ["generation", "review"] as const) {
   }) => {
     const runId = await startRun(page);
     await waitForStatus(page, stage === "generation" ? "生成中" : "评审中");
-    await page.getByRole("button", { name: "取消" }).click();
+    await page.getByRole("button", { name: "取消", exact: true }).click();
     await waitForStatus(page, "已取消");
     await expect(page.getByTestId("connection-status")).toContainText("已关闭");
-    await expect(page.getByRole("button", { name: "取消" })).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "取消", exact: true }),
+    ).toHaveCount(0);
     await expect(page.getByRole("button", { name: "新建任务" })).toBeEnabled();
 
     const snapshot = await getSnapshot(request, runId);

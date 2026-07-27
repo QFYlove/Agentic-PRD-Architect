@@ -19,6 +19,7 @@ vi.mock("mermaid", () => ({
 function apiFor(status: RunStatus): AgentApi {
   return {
     createRun: vi.fn(),
+    listRuns: vi.fn().mockResolvedValue({ items: [], total: 0 }),
     getRun: vi.fn().mockResolvedValue(
       makeSnapshot({
         status,

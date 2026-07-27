@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from backend.errors import EventExpiredError
-from backend.event_store import EventStore
+from backend.event_store import EventStore, SQLiteEventStore
 from backend.schemas import RunEventType
 
 
@@ -96,3 +97,34 @@ async def test_heartbeat_is_not_buffered_or_sequenced() -> None:
     assert heartbeat is None
     assert store.latest_sequence(run_id) == 0
     assert store.buffer_length(run_id) == 0
+
+
+async def test_sqlite_events_replay_after_reopen(tmp_path: Path) -> None:
+    database_path = str(tmp_path / "events.sqlite3")
+    run_id = uuid4()
+    store = SQLiteEventStore(
+        database_path=database_path,
+        buffer_size=10,
+        heartbeat_seconds=1,
+        initial_sequences={},
+    )
+    store.create_run(run_id)
+    event = await store.append(
+        run_id=run_id,
+        event=RunEventType.RUN_STARTED,
+        iteration=1,
+        payload={"persisted": True},
+    )
+    store.close()
+
+    restored = SQLiteEventStore(
+        database_path=database_path,
+        buffer_size=10,
+        heartbeat_seconds=1,
+        initial_sequences={run_id: event.sequence},
+    )
+
+    replayed = restored.replay(run_id, 0)
+    assert len(replayed) == 1
+    assert replayed[0].payload == {"persisted": True}
+    restored.close()

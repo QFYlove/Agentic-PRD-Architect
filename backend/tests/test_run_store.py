@@ -1,10 +1,11 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from backend.errors import StoreCapacityError
-from backend.run_store import InMemoryRunStore
+from backend.run_store import InMemoryRunStore, SQLiteRunStore
 from backend.schemas import RunSnapshot, RunStatus
 
 
@@ -49,3 +50,55 @@ async def test_store_cleanup_only_removes_expired_terminal_runs() -> None:
 
     assert expired == [completed.run_id]
     assert (await store.get(active.run_id)).status is RunStatus.PAUSED
+
+
+async def test_sqlite_store_persists_snapshots_and_lists_recent_runs(
+    tmp_path: Path,
+) -> None:
+    database_path = str(tmp_path / "runs.sqlite3")
+    store = SQLiteRunStore(
+        database_path=database_path,
+        max_runs=5,
+        ttl_seconds=60,
+    )
+    original = snapshot(RunStatus.COMPLETED)
+    original.current_prd = "persisted PRD"
+    await store.create(original)
+    await store.close()
+
+    restored = SQLiteRunStore(
+        database_path=database_path,
+        max_runs=5,
+        ttl_seconds=60,
+    )
+
+    assert (await restored.get(original.run_id)).current_prd == "persisted PRD"
+    summaries = await restored.list_runs(limit=10)
+    assert [item.run_id for item in summaries] == [original.run_id]
+    await restored.close()
+
+
+async def test_sqlite_store_marks_interrupted_runs_failed(tmp_path: Path) -> None:
+    database_path = str(tmp_path / "interrupted.sqlite3")
+    store = SQLiteRunStore(
+        database_path=database_path,
+        max_runs=5,
+        ttl_seconds=60,
+    )
+    active = snapshot(RunStatus.GENERATING)
+    active.active_node = "generator"
+    await store.create(active)
+    await store.close()
+
+    restored = SQLiteRunStore(
+        database_path=database_path,
+        max_runs=5,
+        ttl_seconds=60,
+    )
+    recovered = await restored.get(active.run_id)
+
+    assert recovered.status is RunStatus.FAILED
+    assert recovered.error is not None
+    assert recovered.error.code == "RUN_INTERRUPTED"
+    assert recovered.active_node is None
+    await restored.close()

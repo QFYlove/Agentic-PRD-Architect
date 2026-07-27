@@ -150,6 +150,22 @@ export interface RunSnapshot {
   latest_event_sequence: number;
 }
 
+export interface RunSummary {
+  run_id: string;
+  user_idea: string;
+  status: RunStatus;
+  current_iteration: number;
+  max_iterations: number;
+  latest_score?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunListResponse {
+  items: RunSummary[];
+  total: number;
+}
+
 export interface RunEvent<
   TPayload extends Record<string, unknown> = Record<string, unknown>,
 > {

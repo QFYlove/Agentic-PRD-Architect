@@ -56,9 +56,10 @@ npm run dev
 ```
 
 Open `http://127.0.0.1:4321`; health is at
-`http://127.0.0.1:8000/api/health`. Keep Uvicorn at one worker because RunStore,
-EventStore, and control signals are process-local. Mock Podcast runs score 71
-in v1 and 88 in v2.
+`http://127.0.0.1:8000/api/health`. Conversations, snapshots, and replayable
+events are stored in `data/agentic-prd.sqlite3`. Keep Uvicorn at one worker
+because active workflow tasks and control signals remain process-local. Mock
+Podcast runs score 71 in v1 and 88 in v2.
 
 ## Test and build
 
@@ -89,5 +90,5 @@ manual, credentialed release check and is not part of default automation.
   the selected provider.
 - Frontend cannot reach the API: verify both processes, `/api/health`,
   `PUBLIC_API_BASE_URL`, and `FRONTEND_ORIGINS`.
-- A previous run disappeared: in-memory state is intentionally cleared when
-  the backend restarts.
+- A run was interrupted by a restart: its persisted snapshot is retained and
+  marked failed with `RUN_INTERRUPTED`; start a new run to retry it.

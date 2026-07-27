@@ -5,6 +5,7 @@ import { expect, test } from "@playwright/test";
 import {
   getEvents,
   getSnapshot,
+  PODCAST_IDEA,
   setScenario,
   startRun,
   waitForStatus,
@@ -57,4 +58,20 @@ test("Podcast case completes two reviewed versions and downloads Markdown", asyn
   const path = await download.path();
   expect(path).not.toBeNull();
   expect(await readFile(path!, "utf8")).toBe(v2.content);
+
+  await expect(
+    page.getByRole("button", { name: new RegExp(PODCAST_IDEA) }).first(),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "新建对话" }).click();
+  await expect(
+    page.getByRole("heading", { name: /让每一份需求/ }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: new RegExp(PODCAST_IDEA) })
+    .first()
+    .click();
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("run_id"))
+    .toBe(runId);
+  await waitForStatus(page, "已完成");
 });

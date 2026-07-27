@@ -90,7 +90,7 @@ Tech、UX、Biz 使用独立 Prompt 和独立结构化输出。三个任务并�
 
 ### 3.3 Showcase-first，Production-shaped
 
-第一版使用进程内存储，但通过 `RunStore` 接口隔离存储实现。运行状态、版本历史和事件缓冲在服务重启后可以丢失，这是第一版接受的限制。
+本地版本通过 Store 边界将运行快照、版本历史和业务事件写入 SQLite。服务重启后历史对话仍可读取；重启时尚未完成的 Run 不自动续跑，而是标记为 `RUN_INTERRUPTED`，避免产生无法控制的僵尸任务。
 
 “Production-shaped”在本项目中的含义是：
 
@@ -124,7 +124,9 @@ flowchart LR
     X --> LLM
     B --> LLM
     O --> LLM
-    RM --> RS["InMemory RunStore"]
+    RM --> RS["SQLite RunStore"]
+    ES --> DB["SQLite"]
+    RS --> DB
     LG --> ES
 ```
 
@@ -133,8 +135,8 @@ flowchart LR
 | 组件 | 职责 |
 |---|---|
 | Astro 页面 | 页面壳、基础 SEO、加载 React Island |
-| React Dashboard | 表单、任务控制、SSE 连接、状态归并和可视化 |
-| FastAPI API | 创建任务、查询快照、控制任务、健康检查 |
+| React Dashboard | 对话侧栏、表单、任务控制、SSE 连接、状态归并和可视化 |
+| FastAPI API | 创建任务、列出对话、查询快照、控制任务、健康检查 |
 | SSE Endpoint | 按任务推送带 ID 的结构化事件 |
 | Run Manager | 管理后台协程、运行生命周期和控制信号 |
 | LangGraph Workflow | 执行 Generator、Reviewers、Aggregator、Optimizer 循环 |
@@ -604,11 +606,12 @@ class RunManager:
 - 保存控制信号。
 - 按 TTL 清理过期任务。
 
-`InMemoryRunStore` 建议配置：
+`SQLiteRunStore` 配置：
 
 - 最大保留任务：100。
-- 完成任务 TTL：60 分钟。
-- 运行中任务不因 TTL 被清理。
+- 完成任务 TTL：30 天。
+- JSON 快照写入 `runs` 表。
+- 服务重启时恢复历史终态并终止中断状态。
 - 每个任务单独使用 `asyncio.Lock`。
 
 ### 8.4 EventStore
@@ -617,6 +620,7 @@ class RunManager:
 
 - 递增事件 ID。
 - 有界事件缓冲区。
+- SQLite 中的完整业务事件记录。
 - 一个用于唤醒订阅者的异步条件变量。
 - 最近一次事件时间。
 
@@ -631,7 +635,7 @@ class RunManager:
 
 创建任务后使用 `asyncio.create_task` 启动工作流。RunManager 必须保存 Task 引用，避免任务被垃圾回收，并在完成回调中清理引用。
 
-第一版为单进程架构，不支持多个 Uvicorn Worker。README 和启动命令必须明确使用单 Worker，否则不同进程间的内存状态不共享。
+当前仍为单进程执行架构，不支持多个 Uvicorn Worker。SQLite 可以共享历史数据，但活动 Task、控制信号和 SSE Condition 不跨进程共享。
 
 ---
 
@@ -1281,7 +1285,7 @@ RUN_TTL_SECONDS=3600
 EVENT_BUFFER_SIZE=1000
 SSE_HEARTBEAT_SECONDS=15
 
-GENERATOR_TIMEOUT_SECONDS=90
+GENERATOR_TIMEOUT_SECONDS=240
 REVIEWER_TIMEOUT_SECONDS=45
 OPTIMIZER_TIMEOUT_SECONDS=60
 RUN_TIMEOUT_SECONDS=600
@@ -1532,14 +1536,14 @@ playwright
 |---|---|---|
 | 真实模型评分波动 | 无法稳定复现 71→88 | 验收演示使用确定性 Mock |
 | 三个 Reviewer 增加成本 | 每轮调用数增加 | 并行执行、限制轮数、显示成本 |
-| 内存存储丢失 | 服务重启后任务消失 | 第一版明确限制，使用 RunStore 抽象 |
+| SQLite 文件损坏或不可写 | 历史对话无法恢复或新状态无法落盘 | 启用 WAL、事务提交、启动时建表，并将数据库目录纳入本地备份 |
 | SSE 事件过多 | 浏览器渲染频繁 | 合并 PRD delta、限制缓冲区 |
 | EventSource 断线 | 页面状态不完整 | 事件 ID 补发 + 快照校准 |
 | Pause 与模型调用竞态 | 用户以为立即暂停 | 使用 PAUSE_REQUESTED 和安全点语义 |
 | 结构化输出失败 | 评分流程中断 | 原生 structured output、校验、修复、有限重试 |
 | Mermaid 浏览器依赖 | Astro SSR 报错 | `client:only="react"` + `useEffect` |
 | 成本估算过时 | 展示金额不准确 | 模型价格配置化并标注 Estimated |
-| 单进程内存架构 | 无法多 Worker 扩展 | 第一版固定单 Worker，未来替换共享 Store |
+| 单进程运行时协调 | 无法多 Worker 扩展实时控制与 SSE 通知 | 第一版固定单 Worker；扩展时将锁、控制信号和通知迁移到共享协调层 |
 
 ---
 

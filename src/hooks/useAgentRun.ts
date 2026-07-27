@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 
 import { ApiClientError, HttpAgentApi, type AgentApi } from "../lib/api";
 import { parseRunEvent } from "../lib/contracts";
@@ -12,6 +19,7 @@ import type {
   CreateRunRequest,
   ResumeRunRequest,
   RunEventType,
+  RunSummary,
 } from "../lib/types";
 import { isTerminalRunStatus } from "../lib/types";
 
@@ -54,7 +62,11 @@ export interface UseAgentRunOptions {
 
 export interface AgentRunController {
   state: RunViewState;
+  conversations: RunSummary[];
+  isLoadingConversations: boolean;
   createRun(request: CreateRunRequest): Promise<void>;
+  selectRun(runId: string): Promise<void>;
+  refreshConversations(): Promise<void>;
   pause(): Promise<void>;
   resume(userOverride?: string): Promise<void>;
   cancel(): Promise<void>;
@@ -97,6 +109,8 @@ export function useAgentRun(
   const eventSourceFactory =
     options.eventSourceFactory ?? defaultEventSourceFactory;
   const [state, dispatch] = useReducer(runReducer, initialRunViewState);
+  const [conversations, setConversations] = useState<RunSummary[]>([]);
+  const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const sourceRef = useRef<EventSourceLike | null>(null);
   const sessionRef = useRef(0);
   const mountedRef = useRef(false);
@@ -105,6 +119,24 @@ export function useAgentRun(
     sourceRef.current?.close();
     sourceRef.current = null;
   }, []);
+
+  const refreshConversations = useCallback(async (): Promise<void> => {
+    setIsLoadingConversations(true);
+    try {
+      const response = await api.listRuns();
+      if (mountedRef.current) {
+        setConversations(response.items);
+      }
+    } catch {
+      if (mountedRef.current) {
+        setConversations([]);
+      }
+    } finally {
+      if (mountedRef.current) {
+        setIsLoadingConversations(false);
+      }
+    }
+  }, [api]);
 
   const connect = useCallback(
     (runId: string, afterSequence: number, session: number): void => {
@@ -149,6 +181,7 @@ export function useAgentRun(
                 type: "CONNECTION_CHANGED",
                 connection: "closed",
               });
+              void refreshConversations();
             }
           } catch {
             dispatch({
@@ -203,7 +236,7 @@ export function useAgentRun(
           });
       };
     },
-    [api, closeSource, eventSourceFactory],
+    [api, closeSource, eventSourceFactory, refreshConversations],
   );
 
   const hydrate = useCallback(
@@ -214,6 +247,7 @@ export function useAgentRun(
           return;
         }
         dispatch({ type: "SNAPSHOT_LOADED", snapshot });
+        void refreshConversations();
         if (isTerminalRunStatus(snapshot.status)) {
           dispatch({ type: "CONNECTION_CHANGED", connection: "closed" });
           return;
@@ -232,11 +266,12 @@ export function useAgentRun(
         });
       }
     },
-    [api, closeSource, connect],
+    [api, closeSource, connect, refreshConversations],
   );
 
   useEffect(() => {
     mountedRef.current = true;
+    void refreshConversations();
     const runId = readRunIdFromUrl();
     if (runId) {
       const session = ++sessionRef.current;
@@ -248,7 +283,7 @@ export function useAgentRun(
       sessionRef.current += 1;
       closeSource();
     };
-  }, [closeSource, hydrate]);
+  }, [closeSource, hydrate, refreshConversations]);
 
   const createRun = useCallback(
     async (request: CreateRunRequest): Promise<void> => {
@@ -262,6 +297,7 @@ export function useAgentRun(
         }
         writeRunIdToUrl(created.run_id);
         dispatch({ type: "RUN_SELECTED", runId: created.run_id });
+        void refreshConversations();
         await hydrate(created.run_id, session);
       } catch (error) {
         if (mountedRef.current && session === sessionRef.current) {
@@ -270,7 +306,21 @@ export function useAgentRun(
         }
       }
     },
-    [api, closeSource, hydrate],
+    [api, closeSource, hydrate, refreshConversations],
+  );
+
+  const selectRun = useCallback(
+    async (runId: string): Promise<void> => {
+      if (!runId || runId === state.runId) {
+        return;
+      }
+      const session = ++sessionRef.current;
+      closeSource();
+      writeRunIdToUrl(runId);
+      dispatch({ type: "RUN_SELECTED", runId });
+      await hydrate(runId, session);
+    },
+    [closeSource, hydrate, state.runId],
   );
 
   const runControl = useCallback(
@@ -319,7 +369,11 @@ export function useAgentRun(
 
   return {
     state,
+    conversations,
+    isLoadingConversations,
     createRun,
+    selectRun,
+    refreshConversations,
     pause: () => runControl("pause"),
     resume: (userOverride?: string) =>
       runControl("resume", {

@@ -60,7 +60,8 @@
 | 配置 | pydantic-settings | `.env` 与环境变量校验 | 必选 |
 | LLM SDK | OpenAI Python SDK | DeepSeek/GLM OpenAI 兼容协议客户端 | 必选 |
 | SSE | sse-starlette | 标准 EventSourceResponse | 必选 |
-| 进程内状态 | Python 内存 + asyncio primitives | RunStore、EventStore、控制信号 | 必选 |
+| 本地持久化 | Python `sqlite3` + SQLite WAL | Run 快照、对话列表、可回放事件 | 必选 |
+| 运行时协调 | Python 内存 + asyncio primitives | Run 锁、SSE Condition、控制信号 | 必选 |
 | 后端测试 | pytest + pytest-asyncio + HTTPX | 单元、异步、API 和 SSE 测试 | 必选 |
 | 前端测试 | Vitest + Testing Library | Reducer、Hook 和组件测试 | 建议 |
 | E2E | Playwright | Mock 模式完整流程验收 | 建议 |
@@ -560,6 +561,7 @@ http://127.0.0.1:4321
 使用 React 内存状态：
 
 - 当前 Run 快照。
+- SQLite 对话摘要列表。
 - 连接状态。
 - 最后事件序号。
 - 当前选中的 PRD 版本。
@@ -570,36 +572,33 @@ http://127.0.0.1:4321
 
 ### 8.2 后端 RunStore
 
-第一版使用 `InMemoryRunStore`：
+本地运行使用 `SQLiteRunStore`：
 
-- `dict[UUID, PRDRunState]` 保存任务。
+- SQLite JSON 快照保存完整 Run、版本、评分和遥测。
+- `dict[UUID, PRDRunState]` 作为进程内热缓存。
 - 每个任务独立 `asyncio.Lock`。
 - 完成任务按 TTL 清理。
-- 服务重启后任务丢失。
+- 服务重启后恢复历史终态；中断任务标记为 `RUN_INTERRUPTED`。
 
-通过 `RunStore` Protocol 隔离实现，未来可以替换为 Redis 或 PostgreSQL。
+测试可使用 `InMemoryRunStore`。Store 边界仍允许未来替换为 PostgreSQL。
 
 ### 8.3 EventStore
 
-第一版使用进程内有界缓冲：
+使用 SQLite 事件表和进程内有界热缓冲：
 
 - 每个 Run 独立事件序列。
+- 所有业务事件写入 SQLite。
 - 默认最多 1000 条事件。
 - 使用 `asyncio.Condition` 通知 SSE 订阅者。
-- 支持按 sequence 补发。
+- 支持跨重启按 sequence 补发。
 - 完成后保留到 Run TTL 到期。
 
-### 8.4 不使用数据库
+### 8.4 SQLite 运行约束
 
-第一版不引入：
-
-- SQLite。
-- PostgreSQL。
-- MySQL。
-- Redis。
-- ORM。
-
-理由是当前产品目标是本地 Showcase，持久化并非核心展示能力。若后续要求服务重启恢复或多 Worker，必须先替换 Store 层，不能直接增加 Uvicorn Worker。
+使用 Python 标准库 `sqlite3`，不引入 ORM。数据库默认位于
+`data/agentic-prd.sqlite3`，启用 WAL 和 5 秒 busy timeout。SQLite 只负责
+持久化；活动 Task、Pause/Resume/Cancel 信号和 SSE Condition 仍属于单进程，
+因此不能直接增加 Uvicorn Worker。
 
 ---
 

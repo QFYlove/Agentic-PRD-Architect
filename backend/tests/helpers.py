@@ -14,6 +14,7 @@ from backend.workflow import AgentWorkflow
 def make_settings(**overrides: Any) -> Settings:
     defaults: dict[str, Any] = {
         "_env_file": None,
+        "database_path": ":memory:",
         "run_timeout_seconds": 10,
         "generator_timeout_seconds": 2,
         "reviewer_timeout_seconds": 2,

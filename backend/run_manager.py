@@ -22,6 +22,7 @@ from backend.schemas import (
     RunEventType,
     RunSnapshot,
     RunStatus,
+    RunSummary,
     TokenUsage,
     utc_now,
 )
@@ -92,6 +93,8 @@ class RunManager:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self.tasks.clear()
+        await self.run_store.close()
+        self.event_store.close()
 
     async def _cleanup_loop(self) -> None:
         while True:
@@ -219,6 +222,9 @@ class RunManager:
     async def get_run(self, run_id: UUID) -> RunSnapshot:
         return await self.run_store.get(run_id)
 
+    async def list_runs(self, *, limit: int) -> list[RunSummary]:
+        return await self.run_store.list_runs(limit=limit)
+
     async def commit(
         self,
         run_id: UUID,
@@ -242,6 +248,7 @@ class RunManager:
                     payload=payload or {},
                 )
                 state.latest_event_sequence = envelope.sequence
+            await self.run_store.save_unlocked(run_id)
             for node, node_status in state.node_statuses.items():
                 if (
                     node_status
@@ -295,6 +302,7 @@ class RunManager:
                 payload=event_payload,
             )
             state.latest_event_sequence = envelope.sequence
+            await self.run_store.save_unlocked(run_id)
             return state.model_copy(deep=True)
 
     async def set_stage(self, run_id: UUID, target: RunStatus) -> RunSnapshot:

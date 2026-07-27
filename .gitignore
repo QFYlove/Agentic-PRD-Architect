@@ -26,3 +26,9 @@ __pycache__/
 .DS_Store
 Thumbs.db
 debug.log
+
+# Local persistent data
+data/*.sqlite3
+data/*.sqlite3-*
+data/*.db
+data/*.db-*

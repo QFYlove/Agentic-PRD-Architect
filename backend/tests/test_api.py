@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from uuid import UUID, uuid4
 
 from httpx import ASGITransport, AsyncClient
@@ -55,6 +56,62 @@ async def test_create_snapshot_health_and_openapi_contract() -> None:
     assert result.status is RunStatus.COMPLETED
     assert snapshot.json()["latest_event_sequence"] > 0
     assert "RunSnapshot" in openapi.json()["components"]["schemas"]
+
+
+async def test_run_list_returns_recent_conversation_summaries() -> None:
+    app = create_app(
+        settings=make_settings(),
+        provider=MockLLMProvider(delays_enabled=False),
+    )
+    async with await client_for(app) as client:
+        created = await client.post("/api/runs", json=valid_request())
+        run_id = created.json()["run_id"]
+        await app.state.manager.wait_for_completion(
+            UUID(run_id),
+            wait_seconds=5,
+        )
+        response = await client.get("/api/runs?limit=10")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["run_id"] == run_id
+    assert body["items"][0]["user_idea"] == valid_request()["user_idea"]
+    assert body["items"][0]["status"] in {
+        "COMPLETED",
+        "MAX_ITERATIONS_REACHED",
+    }
+
+
+async def test_conversation_survives_application_recreation(
+    tmp_path: Path,
+) -> None:
+    database_path = str(tmp_path / "conversations.sqlite3")
+    settings = make_settings(database_path=database_path)
+    first_app = create_app(
+        settings=settings,
+        provider=MockLLMProvider(delays_enabled=False),
+    )
+    async with await client_for(first_app) as client:
+        created = await client.post("/api/runs", json=valid_request())
+        run_id = created.json()["run_id"]
+        await first_app.state.manager.wait_for_completion(
+            UUID(run_id),
+            wait_seconds=5,
+        )
+    await first_app.state.manager.shutdown()
+
+    second_app = create_app(
+        settings=settings,
+        provider=MockLLMProvider(delays_enabled=False),
+    )
+    async with await client_for(second_app) as client:
+        listing = await client.get("/api/runs")
+        snapshot = await client.get(f"/api/runs/{run_id}")
+    await second_app.state.manager.shutdown()
+
+    assert listing.json()["items"][0]["run_id"] == run_id
+    assert snapshot.json()["run_id"] == run_id
 
 
 async def test_validation_not_found_and_control_conflict_errors_are_uniform() -> None:

@@ -47,7 +47,7 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 npm run dev
 ```
 
-访问 `http://127.0.0.1:4321`；健康检查地址为 `http://127.0.0.1:8000/api/health`。Uvicorn 应保持单 Worker 运行，因为 RunStore、EventStore 和控制信号都保存在进程内。Mock Podcast 场景的 v1 得分为 71，v2 得分为 88。
+访问 `http://127.0.0.1:4321`；健康检查地址为 `http://127.0.0.1:8000/api/health`。对话、快照和可回放事件保存在 `data/agentic-prd.sqlite3`。Uvicorn 应保持单 Worker 运行，因为活动工作流任务和控制信号仍保存在进程内。Mock Podcast 场景的 v1 得分为 71，v2 得分为 88。
 
 ## 测试与构建
 
@@ -73,4 +73,4 @@ npm run test:e2e:repeat
 - 缺少浏览器可执行文件：运行 `npm run playwright:install`。
 - 启动时提示缺少密钥：启用 Mock，或者为当前 Provider 配置密钥。
 - 前端无法访问 API：检查两个服务、`/api/health`、`PUBLIC_API_BASE_URL` 和 `FRONTEND_ORIGINS`。
-- 上一次运行记录消失：后端重启时会按设计清除内存状态。
+- 后端重启中断了任务：历史快照仍会保留，并以 `RUN_INTERRUPTED` 标记为失败；请新建对话重试。

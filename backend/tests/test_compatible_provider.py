@@ -99,11 +99,7 @@ def provider(
             base_url="https://provider.invalid",
             model="provider-test-model",
             request_timeout_seconds=3,
-            extra_body=(
-                {"thinking": {"type": "disabled"}}
-                if provider_name == "deepseek"
-                else None
-            ),
+            extra_body={"thinking": {"type": "disabled"}},
             client=client,
         ),
         completions,
@@ -161,7 +157,7 @@ async def test_streams_markdown_usage_and_closes_sdk_stream() -> None:
     assert "<script>do not execute</script>" in calls.calls[0]["messages"][1]["content"]
 
 
-async def test_glm_omits_deepseek_specific_thinking_parameter() -> None:
+async def test_glm_disables_thinking_for_compatible_streaming() -> None:
     adapter, calls = provider(
         [FakeStream([delta("# PRD"), SimpleNamespace(choices=[], usage=usage())])],
         provider_name="glm",
@@ -169,7 +165,7 @@ async def test_glm_omits_deepseek_specific_thinking_parameter() -> None:
 
     await collect_stream(adapter)
 
-    assert "extra_body" not in calls.calls[0]
+    assert calls.calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
 
 
 async def test_cancel_closes_in_flight_stream_without_relabeling_error() -> None:

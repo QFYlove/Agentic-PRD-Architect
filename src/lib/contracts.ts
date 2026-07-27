@@ -3,6 +3,7 @@ import type {
   ErrorResponse,
   RunEvent,
   RunEventType,
+  RunListResponse,
   RunSnapshot,
   RunStatus,
 } from "./types";
@@ -81,6 +82,32 @@ export function parseRunSnapshot(value: unknown): RunSnapshot {
     throw new TypeError("Invalid RunSnapshot contract");
   }
   return value as unknown as RunSnapshot;
+}
+
+export function parseRunListResponse(value: unknown): RunListResponse {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.items) ||
+    !isFiniteNumber(value.total)
+  ) {
+    throw new TypeError("Invalid RunListResponse");
+  }
+  for (const item of value.items) {
+    if (
+      !isRecord(item) ||
+      !isString(item.run_id) ||
+      !isString(item.user_idea) ||
+      !isString(item.status) ||
+      !RUN_STATUSES.has(item.status) ||
+      !isFiniteNumber(item.current_iteration) ||
+      !isFiniteNumber(item.max_iterations) ||
+      !isString(item.created_at) ||
+      !isString(item.updated_at)
+    ) {
+      throw new TypeError("Invalid RunSummary");
+    }
+  }
+  return value as unknown as RunListResponse;
 }
 
 export function parseRunEvent(value: unknown): RunEvent {

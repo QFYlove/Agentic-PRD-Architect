@@ -243,6 +243,22 @@ class RunSnapshot(PRDRunState):
     latest_event_sequence: int = Field(default=0, ge=0)
 
 
+class RunSummary(StrictModel):
+    run_id: UUID
+    user_idea: str
+    status: RunStatus
+    current_iteration: int
+    max_iterations: int
+    latest_score: float | None = Field(default=None, ge=0, le=100)
+    created_at: datetime
+    updated_at: datetime
+
+
+class RunListResponse(StrictModel):
+    items: list[RunSummary]
+    total: int = Field(ge=0)
+
+
 class RunEvent(StrictModel):
     run_id: UUID
     sequence: int = Field(ge=1)

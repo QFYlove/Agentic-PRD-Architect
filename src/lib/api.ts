@@ -1,10 +1,16 @@
-import { isRunStatus, parseErrorResponse, parseRunSnapshot } from "./contracts";
+import {
+  isRunStatus,
+  parseErrorResponse,
+  parseRunListResponse,
+  parseRunSnapshot,
+} from "./contracts";
 import { resolvePublicApiBaseUrl } from "./config";
 import type {
   ControlResponse,
   CreateRunRequest,
   CreateRunResponse,
   ResumeRunRequest,
+  RunListResponse,
   RunSnapshot,
   RunStatus,
 } from "./types";
@@ -29,6 +35,7 @@ export class ApiClientError extends Error {
 
 export interface AgentApi {
   createRun(request: CreateRunRequest): Promise<CreateRunResponse>;
+  listRuns(limit?: number): Promise<RunListResponse>;
   getRun(runId: string): Promise<RunSnapshot>;
   pauseRun(runId: string): Promise<ControlResponse>;
   resumeRun(runId: string, request: ResumeRunRequest): Promise<ControlResponse>;
@@ -100,6 +107,14 @@ export class HttpAgentApi implements AgentApi {
         body: JSON.stringify(request),
       },
       parseCreateRunResponse,
+    );
+  }
+
+  listRuns(limit = 50): Promise<RunListResponse> {
+    return this.request(
+      `/api/runs?limit=${encodeURIComponent(String(limit))}`,
+      undefined,
+      parseRunListResponse,
     );
   }
 

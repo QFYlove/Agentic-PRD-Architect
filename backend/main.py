@@ -19,14 +19,14 @@ from sse_starlette.sse import EventSourceResponse
 
 from backend.config import Settings, get_settings
 from backend.errors import AppError, ProviderUnavailableError
-from backend.event_store import EventStore
+from backend.event_store import EventStore, SQLiteEventStore
 from backend.observability import log_event
 from backend.providers.base import LLMProvider
 from backend.providers.compatible import OpenAICompatibleLLMProvider
 from backend.providers.mock import MockLLMProvider
 from backend.providers.scenario import ScenarioController, ScenarioMockLLMProvider
 from backend.run_manager import RunManager
-from backend.run_store import InMemoryRunStore
+from backend.run_store import InMemoryRunStore, SQLiteRunStore
 from backend.schemas import (
     ControlResponse,
     CreateRunRequest,
@@ -40,7 +40,9 @@ from backend.schemas import (
     RevisionPlan,
     RoleReview,
     RunEvent,
+    RunListResponse,
     RunSnapshot,
+    RunSummary,
 )
 from backend.workflow import AgentWorkflow
 
@@ -114,14 +116,11 @@ def create_app(
                 api_key = app_settings.deepseek_api_key
                 base_url = app_settings.deepseek_base_url
                 model = app_settings.deepseek_model
-                extra_body: dict[str, object] | None = {
-                    "thinking": {"type": "disabled"}
-                }
             else:
                 api_key = app_settings.glm_api_key
                 base_url = app_settings.glm_base_url
                 model = app_settings.glm_model
-                extra_body = None
+            extra_body: dict[str, object] = {"thinking": {"type": "disabled"}}
             if api_key is None:
                 raise ProviderUnavailableError
             provider = OpenAICompatibleLLMProvider(
@@ -132,14 +131,27 @@ def create_app(
                 request_timeout_seconds=app_settings.llm_request_timeout_seconds,
                 extra_body=extra_body,
             )
-    run_store = InMemoryRunStore(
-        max_runs=app_settings.max_retained_runs,
-        ttl_seconds=app_settings.run_ttl_seconds,
-    )
-    event_store = EventStore(
-        buffer_size=app_settings.event_buffer_size,
-        heartbeat_seconds=app_settings.sse_heartbeat_seconds,
-    )
+    if app_settings.database_path == ":memory:":
+        run_store = InMemoryRunStore(
+            max_runs=app_settings.max_retained_runs,
+            ttl_seconds=app_settings.run_ttl_seconds,
+        )
+        event_store = EventStore(
+            buffer_size=app_settings.event_buffer_size,
+            heartbeat_seconds=app_settings.sse_heartbeat_seconds,
+        )
+    else:
+        run_store = SQLiteRunStore(
+            database_path=app_settings.database_path,
+            max_runs=app_settings.max_retained_runs,
+            ttl_seconds=app_settings.run_ttl_seconds,
+        )
+        event_store = SQLiteEventStore(
+            database_path=app_settings.database_path,
+            buffer_size=app_settings.event_buffer_size,
+            heartbeat_seconds=app_settings.sse_heartbeat_seconds,
+            initial_sequences=run_store.initial_sequences(),
+        )
     manager = RunManager(
         settings=app_settings,
         provider=provider,
@@ -249,6 +261,19 @@ def create_app(
                     422,
                 ) from exc
             return {"scenario": selected}
+
+    @application.get(
+        "/api/runs",
+        response_model=RunListResponse,
+        tags=["runs"],
+    )
+    async def list_runs(
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> RunListResponse:
+        return RunListResponse(
+            items=await manager.list_runs(limit=limit),
+            total=await manager.run_store.count(),
+        )
 
     @application.post(
         "/api/runs",
@@ -384,6 +409,8 @@ def create_app(
         RevisionPlan,
         PRDVersion,
         RunSnapshot,
+        RunSummary,
+        RunListResponse,
         RunEvent,
         ErrorResponse,
     )

@@ -135,3 +135,15 @@
 获得明确授权、有效 API Key 和网络后，按 README 关闭 Mock，分别选择 DeepSeek
 或 GLM 执行一次手动真实模型发布冒烟；记录模型、Token、估算费用、安全日志和
 最终状态。未获得这些条件时无需重复默认自动化。
+
+## SQLite 对话持久化
+
+- 新增 `SQLiteRunStore`：快照、版本、评分、遥测和错误状态写入
+  `data/agentic-prd.sqlite3`。
+- 新增 `SQLiteEventStore`：业务事件持久化，重启后仍可按 sequence 回放。
+- 新增 `GET /api/runs` 对话摘要列表接口。
+- 前端新增左侧“对话记录”栏，支持新建和切换历史 Run；切换时更新 URL 并隔离
+  旧 SSE 会话。
+- 未完成 Run 在后端重启后标记为 `RUN_INTERRUPTED`，不自动续跑。
+- SQLite 文件、WAL 和共享内存文件已加入 `.gitignore`；E2E 使用
+  `DATABASE_PATH=:memory:` 保持测试隔离。

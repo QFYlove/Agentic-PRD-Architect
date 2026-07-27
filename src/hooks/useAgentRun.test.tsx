@@ -8,6 +8,7 @@ import type {
   CreateRunResponse,
   ResumeRunRequest,
   RunSnapshot,
+  RunListResponse,
 } from "../lib/types";
 import { makeEvent, makeSnapshot, RUN_ID } from "../test/fixtures";
 import { useAgentRun, type EventSourceLike } from "./useAgentRun";
@@ -55,6 +56,7 @@ class MockEventSource implements EventSourceLike {
 }
 
 class FakeApi implements AgentApi {
+  listRuns = vi.fn<() => Promise<RunListResponse>>();
   getRun = vi.fn<(runId: string) => Promise<RunSnapshot>>();
   createRun =
     vi.fn<(request: CreateRunRequest) => Promise<CreateRunResponse>>();
@@ -73,6 +75,7 @@ class FakeApi implements AgentApi {
 
 function setup(snapshot = makeSnapshot({ latest_event_sequence: 7 })) {
   const api = new FakeApi();
+  api.listRuns.mockResolvedValue({ items: [], total: 0 });
   api.getRun.mockResolvedValue(snapshot);
   api.createRun.mockResolvedValue({
     run_id: RUN_ID,
@@ -140,6 +143,46 @@ describe("useAgentRun restoration and EventSource lifecycle", () => {
     );
     expect(api.createRun).toHaveBeenCalledOnce();
     expect(sources).toHaveLength(1);
+  });
+
+  it("loads conversations and switches the selected run", async () => {
+    const alternateRunId = "6f0de4df-13f5-4126-ac32-3a1795b99270";
+    const { api, sources, factory } = setup();
+    api.listRuns.mockResolvedValue({
+      items: [
+        {
+          run_id: alternateRunId,
+          user_idea: "A persisted conversation for another product.",
+          status: "COMPLETED",
+          current_iteration: 2,
+          max_iterations: 3,
+          latest_score: 88,
+          created_at: "2026-07-26T09:00:00Z",
+          updated_at: "2026-07-26T09:05:00Z",
+        },
+      ],
+      total: 1,
+    });
+    api.getRun.mockImplementation(async (runId) =>
+      makeSnapshot({
+        run_id: runId,
+        status: runId === alternateRunId ? "COMPLETED" : "GENERATING",
+      }),
+    );
+    const { result } = renderHook(() =>
+      useAgentRun({ api, eventSourceFactory: factory }),
+    );
+
+    await waitFor(() => expect(result.current.conversations).toHaveLength(1));
+    await act(async () => {
+      await result.current.selectRun(alternateRunId);
+    });
+
+    expect(result.current.state.runId).toBe(alternateRunId);
+    expect(new URL(window.location.href).searchParams.get("run_id")).toBe(
+      alternateRunId,
+    );
+    expect(sources).toHaveLength(0);
   });
 
   it("keeps native reconnect for two errors and snapshot-recovers exactly once on three", async () => {

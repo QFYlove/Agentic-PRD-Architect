@@ -172,6 +172,8 @@ Windows 子进程，避免测试结束后污染开发端口。
 | `src/hooks/useAgentRun.test.tsx` | URL 恢复、三次错误校准、终态、New Run、未知 Run 和卸载测试。 |
 | `src/components/components.test.tsx` | 表单、控制、Markdown 安全、图表降级、Mermaid 和遥测测试。 |
 | `src/components/AgentDashboard.test.tsx` | 空、创建、运行、暂停请求、暂停、完成和失败主状态测试。 |
+| `src/components/ConversationSidebar.tsx` | SQLite 对话摘要列表、新建对话和历史 Run 切换入口。 |
+| `src/components/ConversationSidebar.test.tsx` | 对话摘要、得分显示和选择行为测试。 |
 | `src/test/setup.ts` | Testing Library 清理和 jsdom 的 ResizeObserver/视口测试替身。 |
 | `src/test/fixtures.ts` | 前端单元测试共享的类型正确快照、评审、评分和事件工厂。 |
 | `public/.gitkeep` | 保留当前为空的静态资源目录。 |
@@ -189,8 +191,8 @@ Windows 子进程，避免测试结束后污染开发端口。
 | `backend/errors.py` | 业务、容量、事件过期和 Provider 错误的安全类型体系。 |
 | `backend/prompts.py` | Generator、三 Reviewer 和 Optimizer 的隔离系统 Prompt。 |
 | `backend/telemetry.py` | Token 确定性累加和已知/未知/Mock 费用计算。 |
-| `backend/run_store.py` | 带独立 Run 锁、容量和终态 TTL 的进程内快照存储。 |
-| `backend/event_store.py` | 递增序号、有界回放、多订阅者通知和无缓冲 Heartbeat。 |
+| `backend/run_store.py` | 内存/SQLite 快照 Store、独立 Run 锁、历史列表、恢复和终态 TTL。 |
+| `backend/event_store.py` | SQLite 事件日志、递增序号、有界热回放、多订阅者通知和 Heartbeat。 |
 | `backend/run_manager.py` | API/Graph 协调层；原子提交、任务引用、控制信号、并发和关闭。 |
 | `backend/workflow.py` | LangGraph 循环、节点执行、并行评审、质量门、暂停取消和重试。 |
 | `backend/providers/__init__.py` | 导出 Provider 公共接口与 Mock 实现。 |
@@ -246,7 +248,19 @@ Windows 子进程，避免测试结束后污染开发端口。
 | `memory-bank/progress.md` | 已完成步骤、验证结果、已知事项和下一步。 |
 | `memory-bank/architecture.md` | 本文件；维护稳定边界、决策和文件职责。 |
 
-## 8. 维护规则
+## 8. SQLite 对话持久化
+
+SQLite 是历史事实来源，进程内对象是活动运行的热缓存与协调层。每次
+`RunManager.commit()` 或状态迁移都先追加业务事件，再持久化包含最新 sequence
+的快照；如果两次写入之间进程退出，重启后的 SSE 可以从较旧快照 sequence
+补发事件。`SQLiteEventStore` 保留全部业务事件，同时只把最近
+`EVENT_BUFFER_SIZE` 条加载为热回放缓冲。
+
+活动工作流不做进程级 checkpoint。重启时非终态快照统一转为
+`RUN_INTERRUPTED`，历史 PRD、评分和事件仍可浏览。SQLite 不改变单 Worker
+约束，因为 Task、Run 锁、取消/恢复信号和订阅 Condition 仍在进程内。
+
+## 9. 维护规则
 
 每完成实施步骤都更新 `progress.md`。只有系统边界、协议、状态机、事实来源或
 模块职责发生变化时才更新本文件；不要把逐次测试日志复制到架构记录中。

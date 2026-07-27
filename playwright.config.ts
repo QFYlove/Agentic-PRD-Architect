@@ -32,6 +32,7 @@ export default defineConfig({
               APP_ENV: "test",
               E2E_TEST_MODE: "true",
               ENABLE_MOCK_LLM: "true",
+              DATABASE_PATH: ":memory:",
               FRONTEND_ORIGINS: "http://127.0.0.1:4331",
               GENERATOR_TIMEOUT_SECONDS: "1",
               RUN_TIMEOUT_SECONDS: "20",

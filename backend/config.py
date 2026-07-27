@@ -51,12 +51,13 @@ class Settings(BaseSettings):
     default_max_iterations: int = Field(default=3, ge=1, le=5)
     max_concurrent_runs: int = Field(default=4, ge=1, le=32)
     max_retained_runs: int = Field(default=100, ge=1, le=10_000)
-    run_ttl_seconds: int = Field(default=3600, ge=60)
+    run_ttl_seconds: int = Field(default=2_592_000, ge=60)
     cleanup_interval_seconds: int = Field(default=60, ge=5)
     event_buffer_size: int = Field(default=1000, ge=10, le=100_000)
     sse_heartbeat_seconds: int = Field(default=15, ge=5, le=300)
+    database_path: str = "data/agentic-prd.sqlite3"
 
-    generator_timeout_seconds: int = Field(default=90, ge=1)
+    generator_timeout_seconds: int = Field(default=240, ge=1)
     reviewer_timeout_seconds: int = Field(default=45, ge=1)
     optimizer_timeout_seconds: int = Field(default=60, ge=1)
     run_timeout_seconds: int = Field(default=600, ge=10)

@@ -15,6 +15,7 @@ def test_default_settings_are_mock_first() -> None:
 
     assert settings.enable_mock_llm is True
     assert settings.default_max_iterations == 3
+    assert settings.generator_timeout_seconds == 240
     assert settings.frontend_origins == [
         "http://localhost:4321",
         "http://127.0.0.1:4321",
