@@ -49,6 +49,35 @@ class InMemoryRunStore:
         except KeyError as exc:
             raise RunNotFoundError from exc
 
+    def _evictable_run_ids(self, *, needed: int) -> list[UUID]:
+        """Oldest terminal runs first. Active runs are never evictable."""
+        terminal = sorted(
+            (
+                (snapshot.updated_at, run_id)
+                for run_id, snapshot in self._runs.items()
+                if snapshot.status in TERMINAL_RUN_STATUSES
+            ),
+        )
+        return [run_id for _, run_id in terminal[:needed]]
+
+    async def make_room(self, *, incoming: int = 1) -> list[UUID]:
+        """Evict old terminal runs so ``incoming`` new runs fit under the cap.
+
+        Retention must not be able to wedge the service: without this, a
+        database holding ``max_runs`` finished runs rejects every new run until
+        the TTL elapses. Returns the evicted run ids so the caller can release
+        their events and per-run resources.
+        """
+        async with self._index_lock:
+            overflow = len(self._runs) + incoming - self.max_runs
+            if overflow <= 0:
+                return []
+            evicted = self._evictable_run_ids(needed=overflow)
+            for run_id in evicted:
+                del self._runs[run_id]
+                del self._locks[run_id]
+            return evicted
+
     def get_unlocked(self, run_id: UUID) -> RunSnapshot:
         try:
             return self._runs[run_id]
@@ -125,6 +154,8 @@ class InMemoryRunStore:
                         if snapshot.latest_evaluation is not None
                         else None
                     ),
+                    best_version=snapshot.best_version,
+                    best_score=snapshot.best_score,
                     created_at=snapshot.created_at,
                     updated_at=snapshot.updated_at,
                 )
@@ -192,6 +223,25 @@ class SQLiteRunStore(InMemoryRunStore):
             self._locks[snapshot.run_id] = asyncio.Lock()
         for snapshot in interrupted:
             self._persist(snapshot)
+        self._enforce_retention_on_load()
+
+    def _enforce_retention_on_load(self) -> None:
+        """Trim a database that holds more runs than ``max_runs`` allows.
+
+        ``_load_snapshots`` bypasses ``create()``, so without this a database at
+        or over the cap would make every subsequent ``create()`` raise
+        ``StoreCapacityError`` until the TTL expired -- 30 days by default.
+        """
+        overflow = len(self._runs) - self.max_runs
+        if overflow <= 0:
+            return
+        evicted = self._evictable_run_ids(needed=overflow)
+        if not evicted:
+            return
+        for run_id in evicted:
+            del self._runs[run_id]
+            del self._locks[run_id]
+        self._delete_rows(evicted)
 
     def _persist(self, snapshot: RunSnapshot) -> None:
         self._connection.execute(
@@ -209,6 +259,20 @@ class SQLiteRunStore(InMemoryRunStore):
             ),
         )
         self._connection.commit()
+
+    def _delete_rows(self, run_ids: list[UUID]) -> None:
+        if not run_ids:
+            return
+        self._connection.executemany(
+            "DELETE FROM runs WHERE run_id = ?",
+            [(str(run_id),) for run_id in run_ids],
+        )
+        self._connection.commit()
+
+    async def make_room(self, *, incoming: int = 1) -> list[UUID]:
+        evicted = await super().make_room(incoming=incoming)
+        self._delete_rows(evicted)
+        return evicted
 
     async def create(self, snapshot: RunSnapshot) -> None:
         await super().create(snapshot)
@@ -233,12 +297,7 @@ class SQLiteRunStore(InMemoryRunStore):
 
     async def cleanup_expired(self) -> list[UUID]:
         expired = await super().cleanup_expired()
-        if expired:
-            self._connection.executemany(
-                "DELETE FROM runs WHERE run_id = ?",
-                [(str(run_id),) for run_id in expired],
-            )
-            self._connection.commit()
+        self._delete_rows(expired)
         return expired
 
     async def close(self) -> None:

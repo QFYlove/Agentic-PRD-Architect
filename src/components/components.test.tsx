@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
+import { EMPTY_SEVERITY_COUNTS } from "../lib/runReducer";
 import { makeSnapshot, RUN_ID } from "../test/fixtures";
 import { PRDViewer } from "./PRDViewer";
 import { ProductIdeaForm } from "./ProductIdeaForm";
@@ -102,36 +103,57 @@ describe("RunControls", () => {
 });
 
 describe("PRDViewer", () => {
-  it("renders GFM, skips raw HTML, and exposes version tabs", () => {
+  it("renders GFM, skips raw HTML, and labels the version it is showing", () => {
     const { container } = render(
       <PRDViewer
         runId={RUN_ID}
-        drafts={{
-          1: {
-            version: 1,
-            attempt: 1,
-            content:
-              "# Title\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n<script>alert(1)</script>",
-            complete: true,
-          },
-          2: {
-            version: 2,
-            attempt: 1,
-            content: "# Streaming",
-            complete: false,
-          },
+        draft={{
+          version: 1,
+          attempt: 1,
+          content:
+            "# Title\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n<script>alert(1)</script>",
+          complete: true,
         }}
-        scores={{
-          1: { version: 1, tech: 80, ux: 81, biz: 82, overall: 81 },
+        score={{
+          version: 1,
+          tech: 80,
+          ux: 81,
+          biz: 82,
+          overall: 81,
+          severity: EMPTY_SEVERITY_COUNTS,
         }}
-        selectedVersion={1}
-        onSelectVersion={vi.fn()}
       />,
     );
     expect(screen.getByRole("heading", { name: "Title" })).toBeTruthy();
     expect(container.querySelector("table")).toBeTruthy();
     expect(container.querySelector("script")).toBeNull();
-    expect(screen.getAllByRole("tab")).toHaveLength(2);
+    expect(screen.getByTestId("prd-version-label").textContent).toContain("v1");
+    expect(screen.getByTestId("prd-version-label").textContent).toContain("81");
+  });
+
+  it("waits for the first draft instead of showing an empty document frame", () => {
+    render(<PRDViewer runId={RUN_ID} draft={null} score={undefined} />);
+    expect(screen.getByRole("heading", { name: "等待首版草稿" })).toBeTruthy();
+    expect(screen.queryByTestId("prd-content")).toBeNull();
+    expect(
+      (screen.getByTestId("download-markdown") as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it("marks an incomplete draft as still streaming", () => {
+    render(
+      <PRDViewer
+        runId={RUN_ID}
+        draft={{
+          version: 2,
+          attempt: 1,
+          content: "# Streaming",
+          complete: false,
+        }}
+        score={undefined}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toContain("正在生成");
   });
 });
 
@@ -173,7 +195,14 @@ describe("visualization and telemetry fallbacks", () => {
     render(
       <RadarScoreChart
         scores={{
-          1: { version: 1, tech: 0, ux: 50, biz: 100, overall: 50 },
+          1: {
+            version: 1,
+            tech: 0,
+            ux: 50,
+            biz: 100,
+            overall: 50,
+            severity: EMPTY_SEVERITY_COUNTS,
+          },
         }}
       />,
     );
@@ -203,6 +232,65 @@ describe("visualization and telemetry fallbacks", () => {
     expect(screen.getByText("1分 5秒")).toBeTruthy();
     expect(screen.getByText("2,168")).toBeTruthy();
     expect(screen.getByText("$0.0000")).toBeTruthy();
-    expect(screen.getByText("模拟")).toBeTruthy();
+    expect(screen.getByTestId("telemetry-mock").textContent).toBe("模拟数据");
+  });
+
+  /**
+   * A 500-second run gives no clue on its own about which node owned the time.
+   * The failed attempt is listed too: it burned two minutes and produced nothing,
+   * which is exactly the row a slow run needs to show.
+   */
+  it("attributes the run's time to individual node calls, failures included", () => {
+    render(
+      <TelemetryPanel
+        snapshot={makeSnapshot({
+          node_timings: [
+            {
+              node: "generator",
+              version: 1,
+              attempt: 1,
+              seconds: 62.5,
+              succeeded: true,
+              input_tokens: 493,
+              output_tokens: 1717,
+            },
+            {
+              node: "ux_reviewer",
+              version: 1,
+              attempt: 1,
+              seconds: 11,
+              succeeded: true,
+              input_tokens: 2000,
+              output_tokens: 400,
+            },
+            {
+              node: "generator",
+              version: 2,
+              attempt: 2,
+              seconds: 120,
+              succeeded: false,
+              input_tokens: 800,
+              output_tokens: 1200,
+            },
+          ],
+        })}
+      />,
+    );
+    const rows = screen.getAllByTestId("node-timing-row");
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.textContent).toContain("Generator v1");
+    expect(rows[0]?.textContent).toContain("62.5 s");
+    expect(rows[0]?.textContent).toContain("493/1717 tok");
+    expect(rows[1]?.textContent).toContain("UX Reviewer v1");
+    expect(rows[2]?.textContent).toContain("Generator v2");
+    expect(rows[2]?.textContent).toContain("第 2 次");
+    expect(rows[2]?.textContent).toContain("失败");
+  });
+
+  /** A run recorded before timings existed has no such key and must still render. */
+  it("omits the timing list rather than failing when nothing was recorded", () => {
+    render(<TelemetryPanel snapshot={makeSnapshot()} />);
+    expect(screen.queryByTestId("node-timings")).toBeNull();
+    expect(screen.getByText("1/3")).toBeTruthy();
   });
 });

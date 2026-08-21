@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     enable_mock_llm: bool = True
     llm_provider: Literal["deepseek", "glm"] = "deepseek"
     llm_request_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
+    llm_max_output_tokens: int = Field(default=16_000, ge=1_000, le=200_000)
+    """Explicit per-request output cap sent as ``max_tokens``.
+
+    Omitting ``max_tokens`` leaves the provider's server-side default in force,
+    which is model- and endpoint-dependent and small enough to truncate a full
+    PRD mid-document. Sending it explicitly makes the ceiling a configured value
+    rather than an unknown one; ``finish_reason="length"`` then reports hitting
+    *this* limit and the generator retries instead of shipping a partial PRD.
+    """
     deepseek_api_key: SecretStr | None = Field(default=None, repr=False)
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"

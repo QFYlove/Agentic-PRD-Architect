@@ -11,7 +11,13 @@ import type {
   RunListResponse,
 } from "../lib/types";
 import { makeEvent, makeSnapshot, RUN_ID } from "../test/fixtures";
-import { useAgentRun, type EventSourceLike } from "./useAgentRun";
+import {
+  SOURCE_CLOSED,
+  SOURCE_CONNECTING,
+  SOURCE_OPEN,
+  useAgentRun,
+  type EventSourceLike,
+} from "./useAgentRun";
 
 class MockEventSource implements EventSourceLike {
   readonly listeners = new Map<
@@ -21,6 +27,7 @@ class MockEventSource implements EventSourceLike {
   onopen: ((event: Event) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   closed = false;
+  readyState = SOURCE_CONNECTING;
 
   constructor(public readonly url: string) {}
 
@@ -43,15 +50,25 @@ class MockEventSource implements EventSourceLike {
   }
 
   open(): void {
+    this.readyState = SOURCE_OPEN;
     this.onopen?.(new Event("open"));
   }
 
+  /** A recoverable error: the browser keeps retrying on its own. */
   error(): void {
+    this.readyState = SOURCE_CONNECTING;
+    this.onerror?.(new Event("error"));
+  }
+
+  /** A fatal close: EventSource will never reconnect by itself. */
+  fatalError(): void {
+    this.readyState = SOURCE_CLOSED;
     this.onerror?.(new Event("error"));
   }
 
   close(): void {
     this.closed = true;
+    this.readyState = SOURCE_CLOSED;
   }
 }
 
@@ -199,6 +216,161 @@ describe("useAgentRun restoration and EventSource lifecycle", () => {
     await waitFor(() => expect(sources).toHaveLength(2));
     expect(api.getRun).toHaveBeenCalledTimes(2);
     expect(sources[0]?.closed).toBe(true);
+  });
+
+  it("recovers immediately on a single fatal CLOSED error", async () => {
+    window.history.replaceState({}, "", `/?run_id=${RUN_ID}`);
+    const { api, sources, factory } = setup();
+    const { result } = renderHook(() =>
+      useAgentRun({ api, eventSourceFactory: factory }),
+    );
+    await waitFor(() => expect(sources).toHaveLength(1));
+    act(() => sources[0]?.fatalError());
+    await waitFor(() => expect(sources).toHaveLength(2));
+    expect(api.getRun).toHaveBeenCalledTimes(2);
+    expect(sources[0]?.closed).toBe(true);
+    expect(result.current.state.runId).toBe(RUN_ID);
+  });
+
+  it("keeps a single CONNECTING error on native retry without rebuilding", async () => {
+    window.history.replaceState({}, "", `/?run_id=${RUN_ID}`);
+    const { api, sources, factory } = setup();
+    const { result } = renderHook(() =>
+      useAgentRun({ api, eventSourceFactory: factory }),
+    );
+    await waitFor(() => expect(sources).toHaveLength(1));
+    act(() => sources[0]?.open());
+    act(() => sources[0]?.error());
+    expect(api.getRun).toHaveBeenCalledTimes(1);
+    expect(sources).toHaveLength(1);
+    expect(sources[0]?.closed).toBe(false);
+    expect(result.current.state.connection).toBe("connecting");
+  });
+
+  it("ignores late events from the superseded source after recovery", async () => {
+    window.history.replaceState({}, "", `/?run_id=${RUN_ID}`);
+    const { api, sources, factory } = setup();
+    const { result } = renderHook(() =>
+      useAgentRun({ api, eventSourceFactory: factory }),
+    );
+    await waitFor(() => expect(sources).toHaveLength(1));
+    act(() => sources[0]?.fatalError());
+    await waitFor(() => expect(sources).toHaveLength(2));
+
+    const ghost = makeEvent(8, "prd_delta", {
+      version: 1,
+      attempt: 1,
+      delta: "ghost",
+    });
+    act(() => sources[0]?.emit("prd_delta", ghost));
+    expect(result.current.state.drafts[1]).toBeUndefined();
+
+    act(() =>
+      sources[1]?.emit(
+        "prd_delta",
+        makeEvent(8, "prd_delta", {
+          version: 1,
+          attempt: 1,
+          delta: "real",
+        }),
+      ),
+    );
+    expect(result.current.state.drafts[1]?.content).toBe("real");
+  });
+
+  it("stops reconnecting once the run is terminal", async () => {
+    window.history.replaceState({}, "", `/?run_id=${RUN_ID}`);
+    const { api, sources, factory } = setup();
+    const { result } = renderHook(() =>
+      useAgentRun({ api, eventSourceFactory: factory }),
+    );
+    await waitFor(() => expect(sources).toHaveLength(1));
+    act(() => sources[0]?.emit("run_completed", makeEvent(8, "run_completed")));
+    expect(sources[0]?.closed).toBe(true);
+    act(() => sources[0]?.fatalError());
+    expect(sources).toHaveLength(1);
+    expect(api.getRun).toHaveBeenCalledTimes(1);
+    expect(result.current.state.connection).toBe("closed");
+  });
+
+  it("recovers a terminal run found by the recovery snapshot without resubscribing", async () => {
+    window.history.replaceState({}, "", `/?run_id=${RUN_ID}`);
+    const { api, sources, factory } = setup();
+    api.getRun
+      .mockResolvedValueOnce(makeSnapshot({ latest_event_sequence: 7 }))
+      .mockResolvedValueOnce(
+        makeSnapshot({ status: "COMPLETED", latest_event_sequence: 12 }),
+      );
+    const { result } = renderHook(() =>
+      useAgentRun({ api, eventSourceFactory: factory }),
+    );
+    await waitFor(() => expect(sources).toHaveLength(1));
+    act(() => sources[0]?.fatalError());
+    await waitFor(() => expect(result.current.state.status).toBe("COMPLETED"));
+    expect(sources).toHaveLength(1);
+    expect(result.current.state.connection).toBe("closed");
+  });
+
+  it("manual retry recalibrates the existing run instead of creating one", async () => {
+    window.history.replaceState({}, "", `/?run_id=${RUN_ID}`);
+    const { api, sources, factory } = setup();
+    const { result } = renderHook(() =>
+      useAgentRun({ api, eventSourceFactory: factory }),
+    );
+    await waitFor(() => expect(sources).toHaveLength(1));
+    act(() =>
+      sources[0]?.emit(
+        "status_changed",
+        makeEvent(8, "status_changed", { current: "REVIEWING" }),
+      ),
+    );
+    expect(result.current.state.events).toHaveLength(1);
+
+    await act(async () => {
+      await result.current.retryConnection();
+    });
+
+    expect(api.createRun).not.toHaveBeenCalled();
+    expect(api.getRun).toHaveBeenCalledTimes(2);
+    expect(result.current.state.runId).toBe(RUN_ID);
+    expect(result.current.state.events).toHaveLength(1);
+    expect(sources).toHaveLength(2);
+    expect(sources[0]?.closed).toBe(true);
+    expect(new URL(window.location.href).searchParams.get("run_id")).toBe(
+      RUN_ID,
+    );
+  });
+
+  it("manual retry during automatic recovery leaves one live source", async () => {
+    window.history.replaceState({}, "", `/?run_id=${RUN_ID}`);
+    const { api, sources, factory } = setup();
+    let releaseRecovery: (() => void) | null = null;
+    api.getRun
+      .mockResolvedValueOnce(makeSnapshot({ latest_event_sequence: 7 }))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseRecovery = () =>
+              resolve(makeSnapshot({ latest_event_sequence: 7 }));
+          }),
+      )
+      .mockResolvedValue(makeSnapshot({ latest_event_sequence: 9 }));
+    const { result } = renderHook(() =>
+      useAgentRun({ api, eventSourceFactory: factory }),
+    );
+    await waitFor(() => expect(sources).toHaveLength(1));
+    act(() => sources[0]?.fatalError());
+    await waitFor(() => expect(releaseRecovery).not.toBeNull());
+
+    await act(async () => {
+      await result.current.retryConnection();
+    });
+    act(() => releaseRecovery?.());
+    await waitFor(() => expect(sources).toHaveLength(2));
+
+    expect(sources).toHaveLength(2);
+    expect(sources[1]?.closed).toBe(false);
+    expect(sources[1]?.url).toContain("after_sequence=9");
   });
 
   it("resets the error streak after a successful open", async () => {

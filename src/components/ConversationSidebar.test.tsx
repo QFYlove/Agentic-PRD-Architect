@@ -37,4 +37,32 @@ describe("ConversationSidebar", () => {
     expect(onSelect).toHaveBeenCalledWith("run-1");
     expect(screen.getByText("88.0")).toBeTruthy();
   });
+
+  it("labels the best version rather than the latest score", async () => {
+    render(
+      <ConversationSidebar
+        conversations={[
+          {
+            run_id: "run-2",
+            user_idea: "第三版评分回退的任务",
+            status: "MAX_ITERATIONS_REACHED",
+            current_iteration: 3,
+            max_iterations: 3,
+            latest_score: 78.3,
+            best_version: 2,
+            best_score: 81.7,
+            created_at: "2026-07-26T10:00:00Z",
+            updated_at: "2026-07-26T10:05:00Z",
+          },
+        ]}
+        selectedRunId={null}
+        isLoading={false}
+        onSelect={vi.fn()}
+        onNewConversation={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("v2 · 81.7")).toBeTruthy();
+    expect(screen.queryByText("78.3")).toBeNull();
+  });
 });

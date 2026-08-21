@@ -43,12 +43,21 @@ const EVENT_TYPES: RunEventType[] = [
   "run_failed",
 ];
 
+/** `EventSource.readyState` values, per the WHATWG spec. */
+export const SOURCE_CONNECTING = 0;
+export const SOURCE_OPEN = 1;
+export const SOURCE_CLOSED = 2;
+
+/** Consecutive CONNECTING-state errors tolerated before forcing recovery. */
+const MAX_NATIVE_RETRIES = 3;
+
 export interface EventSourceLike {
   addEventListener(
     type: string,
     listener: (event: MessageEvent<string>) => void,
   ): void;
   close(): void;
+  readonly readyState: number;
   onopen: ((event: Event) => void) | null;
   onerror: ((event: Event) => void) | null;
 }
@@ -161,7 +170,10 @@ export function useAgentRun(
 
       for (const eventType of EVENT_TYPES) {
         source.addEventListener(eventType, (message) => {
-          if (session !== sessionRef.current) {
+          // A superseded source can still deliver buffered events after
+          // recovery swapped in its replacement; those would double-apply
+          // deltas the new source is about to replay.
+          if (session !== sessionRef.current || sourceRef.current !== source) {
             return;
           }
           try {
@@ -201,7 +213,14 @@ export function useAgentRun(
           return;
         }
         consecutiveErrors += 1;
-        if (consecutiveErrors < 3) {
+        // CONNECTING means the browser is already retrying on its own, so let
+        // it. CLOSED is fatal -- EventSource will never reconnect, and waiting
+        // for a third error that can never arrive is what used to strand the UI
+        // in "connecting" forever.
+        if (
+          source.readyState !== SOURCE_CLOSED &&
+          consecutiveErrors < MAX_NATIVE_RETRIES
+        ) {
           dispatch({ type: "CONNECTION_CHANGED", connection: "connecting" });
           return;
         }
@@ -353,10 +372,14 @@ export function useAgentRun(
     if (!state.runId) {
       return;
     }
+    // Bumping the session first invalidates any in-flight automatic recovery,
+    // so a manual retry never races it into two live EventSources.
     const session = ++sessionRef.current;
     closeSource();
     dispatch({ type: "CLEAR_ERROR" });
-    dispatch({ type: "RUN_SELECTED", runId: state.runId });
+    dispatch({ type: "CONNECTION_CHANGED", connection: "recovering" });
+    // Deliberately not RUN_SELECTED: this recalibrates the existing run from
+    // its latest snapshot rather than discarding the trace and starting over.
     await hydrate(state.runId, session);
   }, [closeSource, hydrate, state.runId]);
 

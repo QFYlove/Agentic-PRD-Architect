@@ -44,14 +44,11 @@ export function RunControls({
   }
 
   return (
-    <section
-      className="rounded-2xl border border-white/10 bg-slate-950/65 p-4"
-      aria-labelledby="run-controls-heading"
-    >
+    <section className="panel" aria-labelledby="run-controls-heading">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2
           id="run-controls-heading"
-          className="text-sm font-semibold text-white"
+          className="text-sm font-semibold text-ink"
         >
           运行控制
         </h2>
@@ -91,17 +88,17 @@ export function RunControls({
       </div>
 
       {status === "PAUSE_REQUESTED" && (
-        <p className="mt-3 text-sm text-amber-200" role="status">
+        <p className="mt-3 text-sm text-warn" role="status">
           当前安全步骤完成后，工作流将自动暂停。
         </p>
       )}
 
       {status === "PAUSED" && showResumeForm && (
         <form
-          className="mt-4 border-t border-white/10 pt-4"
+          className="mt-4 border-t border-line pt-4"
           onSubmit={submitResume}
         >
-          <label className="block text-sm font-medium text-slate-200">
+          <label className="block text-sm font-medium text-ink">
             补充优化要求（选填）
             <textarea
               className="field mt-2 min-h-24 resize-y"
@@ -116,7 +113,7 @@ export function RunControls({
             <span
               id="override-help"
               className={`text-xs ${
-                override.length > 2000 ? "text-rose-300" : "text-slate-500"
+                override.length > 2000 ? "text-danger" : "text-ink-faint"
               }`}
             >
               {override.length}/2000 · 此内容用于补充 PRD

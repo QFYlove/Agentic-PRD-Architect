@@ -13,6 +13,7 @@ export interface RunSnapshot {
   status: string;
   latest_event_sequence: number;
   current_prd: string;
+  current_prd_attempt: number;
   versions: Array<{
     version: number;
     content: string;

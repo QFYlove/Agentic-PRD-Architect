@@ -10,6 +10,7 @@
   "active_node": null,
   "versions": [],
   "current_prd": "",
+  "current_prd_attempt": 1,
   "latest_evaluation": null,
   "reviews": {},
   "pending_revision_plan": null,

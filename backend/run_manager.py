@@ -9,13 +9,15 @@ from uuid import UUID, uuid4
 
 from backend.config import Settings
 from backend.errors import RunCapacityError, RunConflictError
-from backend.event_store import EventStore
+from backend.event_store import TRANSIENT_EVENT_TYPES, EventStore
+from backend.language import detect_output_language
 from backend.observability import log_event
 from backend.providers.base import LLMProvider
 from backend.run_store import InMemoryRunStore
 from backend.schemas import (
     CreateRunRequest,
     NodeStatus,
+    NodeTiming,
     PRDVersion,
     ResumeRunRequest,
     RunEvent,
@@ -104,17 +106,20 @@ class RunManager:
     async def cleanup_once(self) -> list[UUID]:
         expired = await self.run_store.cleanup_expired()
         for run_id in expired:
-            self.event_store.remove_run(run_id)
-            self.cancel_signals.pop(run_id, None)
-            self.resume_signals.pop(run_id, None)
-            self._active_started.pop(run_id, None)
-            self._paused_started.pop(run_id, None)
-            self._paused_total.pop(run_id, None)
-            for key in [key for key in self._node_started if key[0] == run_id]:
-                self._node_started.pop(key, None)
-            self.tasks.pop(run_id, None)
+            self._release_run_resources(run_id)
             log_event(LOGGER, "run_resources_cleaned", run_id=run_id)
         return expired
+
+    def _release_run_resources(self, run_id: UUID) -> None:
+        self.event_store.remove_run(run_id)
+        self.cancel_signals.pop(run_id, None)
+        self.resume_signals.pop(run_id, None)
+        self._active_started.pop(run_id, None)
+        self._paused_started.pop(run_id, None)
+        self._paused_total.pop(run_id, None)
+        for key in [key for key in self._node_started if key[0] == run_id]:
+            self._node_started.pop(key, None)
+        self.tasks.pop(run_id, None)
 
     async def create_run(self, request: CreateRunRequest) -> RunSnapshot:
         if not self._accepting:
@@ -122,6 +127,9 @@ class RunManager:
         async with self._create_lock:
             if await self.run_store.active_count() >= self.settings.max_concurrent_runs:
                 raise RunCapacityError
+            for evicted in await self.run_store.make_room():
+                self._release_run_resources(evicted)
+                log_event(LOGGER, "run_evicted_for_retention", run_id=evicted)
             run_id = uuid4()
             now = utc_now()
             snapshot = RunSnapshot(
@@ -129,6 +137,14 @@ class RunManager:
                 user_idea=request.user_idea,
                 target_audience=request.target_audience,
                 user_constraints=request.user_constraints,
+                # Decided once, from the user's own words, so the generator, all
+                # three reviewers, and the optimizer cannot each pick a different
+                # language from their own slice of the input.
+                output_language=detect_output_language(
+                    request.user_idea,
+                    request.target_audience,
+                    request.user_constraints,
+                ),
                 max_iterations=request.max_iterations,
                 quality_threshold=request.quality_threshold,
                 node_statuses={
@@ -240,6 +256,7 @@ class RunManager:
             mutation(state)
             state.updated_at = utc_now()
             state.elapsed_seconds = self.active_elapsed(run_id)
+            durable = True
             if event is not None:
                 envelope = await self.event_store.append(
                     run_id=run_id,
@@ -248,7 +265,14 @@ class RunManager:
                     payload=payload or {},
                 )
                 state.latest_event_sequence = envelope.sequence
-            await self.run_store.save_unlocked(run_id)
+                durable = event not in TRANSIENT_EVENT_TYPES
+            if durable:
+                # Transient events (PRD deltas) mutate `current_prd` in memory but
+                # skip the snapshot write: the very next durable boundary --
+                # `prd_generated` for a finished generation -- persists the full
+                # text, so rewriting the whole snapshot per 128-character slice
+                # only produces write amplification.
+                await self.run_store.save_unlocked(run_id)
             for node, node_status in state.node_statuses.items():
                 if (
                     node_status
@@ -450,6 +474,44 @@ class RunManager:
         )
         await self.event_store.wake(run_id)
         return result
+
+    async def record_timing(
+        self,
+        run_id: UUID,
+        *,
+        node: str,
+        version: int,
+        attempt: int,
+        seconds: float,
+        succeeded: bool,
+        usage: TokenUsage | None,
+    ) -> RunSnapshot:
+        """Append one node call's duration to the snapshot.
+
+        No event of its own: the timing rides the snapshot, and every caller of
+        this also records usage or fails the run, both of which already notify.
+        Adding an event type for it would change the wire contract for something
+        the reader only looks at after the run is over.
+
+        ``usage`` is ``None`` when the provider did not report any -- the fields
+        stay zero rather than being estimated, because a made-up token count is
+        worse than an absent one.
+        """
+
+        def mutate(state: RunSnapshot) -> None:
+            state.node_timings.append(
+                NodeTiming(
+                    node=node,
+                    version=version,
+                    attempt=attempt,
+                    seconds=round(max(0.0, seconds), 2),
+                    succeeded=succeeded,
+                    input_tokens=usage.input_tokens if usage else 0,
+                    output_tokens=usage.output_tokens if usage else 0,
+                )
+            )
+
+        return await self.commit(run_id, mutate)
 
     async def record_usage(
         self,

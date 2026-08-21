@@ -10,6 +10,23 @@ const ERROR_MESSAGES: Record<string, string> = {
   PROVIDER_TEMPORARY_ERROR: "模型服务暂时不可用，请稍后重试。",
   PROVIDER_AUTHENTICATION_FAILED: "模型服务认证失败，请检查 API Key。",
   PROVIDER_MODEL_INVALID: "当前模型名称无效，请检查 Provider 配置。",
+  PROVIDER_INSUFFICIENT_BALANCE: "模型服务账户余额或配额不足，请充值后重试。",
+  PROVIDER_FORBIDDEN: "模型服务拒绝访问当前模型，请检查账号权限。",
+  PROVIDER_REQUEST_REJECTED: "模型服务拒绝了本次请求内容，请调整输入后重试。",
+  // Three distinct causes, three distinct sentences. They used to share one
+  // code, which meant an output-length problem and a mid-stream service failure
+  // read identically and neither told the user what to change.
+  PROVIDER_OUTPUT_TRUNCATED:
+    "PRD 输出达到长度限制，系统重试后仍未能完整生成。可以精简需求描述或降低目标篇幅后重新运行。",
+  PROVIDER_OUTPUT_UNFINISHED:
+    "模型提前结束了 PRD 输出，系统重试后仍未得到完整文档，请重新运行。",
+  PROVIDER_OUTPUT_INTERRUPTED: "模型服务在生成过程中暂时中断，请稍后重新生成。",
+  // Kept for runs recorded before the split above.
+  PROVIDER_OUTPUT_INCOMPLETE:
+    "模型生成的文档不完整（可能被输出长度限制截断），请重新运行。",
+  PROVIDER_CONTENT_FILTERED:
+    "模型服务的内容安全策略拦截了本次生成，请调整需求描述后重试。",
+  PROVIDER_ERROR: "模型服务调用失败，请稍后重试。",
   PROVIDER_UNAVAILABLE: "模型服务不可用，请检查 Provider 配置。",
   RUN_TIMEOUT: "任务运行超时，请缩小需求范围后重试。",
   STRUCTURED_OUTPUT_INVALID: "模型返回的数据格式无效，请重新运行。",

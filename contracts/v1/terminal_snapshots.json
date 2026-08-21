@@ -29,6 +29,8 @@
     "status": "MAX_ITERATIONS_REACHED",
     "versions": [],
     "current_prd": "# Best available PRD",
+    "best_version": 2,
+    "best_score": 81.7,
     "node_statuses": {},
     "total_tokens": {
       "input_tokens": 150,
@@ -71,6 +73,7 @@
     "status": "FAILED",
     "versions": [],
     "current_prd": "",
+    "current_prd_attempt": 2,
     "node_statuses": {
       "generator": "FAILED"
     },

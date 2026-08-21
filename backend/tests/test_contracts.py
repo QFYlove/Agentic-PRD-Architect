@@ -26,6 +26,38 @@ def test_versioned_contract_examples_match_pydantic_models() -> None:
     ErrorResponse.model_validate(load_contract("error_response.json"))
 
 
+def test_streaming_attempt_defaults_to_one_for_older_snapshots() -> None:
+    """Snapshots persisted before the field existed must still deserialize."""
+    payload = load_contract("run_snapshot.json")
+    del payload["current_prd_attempt"]
+
+    assert RunSnapshot.model_validate(payload).current_prd_attempt == 1
+
+
+def test_best_version_defaults_to_absent_for_older_snapshots() -> None:
+    """The pointer was added in a later round; old rows must still load."""
+    payload = load_contract("run_snapshot.json")
+
+    snapshot = RunSnapshot.model_validate(payload)
+
+    assert snapshot.best_version is None
+    assert snapshot.best_score is None
+    assert snapshot.output_language == "en"
+
+
+def test_capped_terminal_fixture_carries_the_best_version() -> None:
+    capped = next(
+        value
+        for value in load_contract("terminal_snapshots.json")
+        if value["status"] == "MAX_ITERATIONS_REACHED"
+    )
+
+    snapshot = RunSnapshot.model_validate(capped)
+
+    assert snapshot.best_version == 2
+    assert snapshot.best_score == 81.7
+
+
 def test_contracts_cover_every_terminal_status_and_event_type() -> None:
     snapshots = [
         RunSnapshot.model_validate(value)

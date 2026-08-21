@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from backend.language import DEFAULT_OUTPUT_LANGUAGE
 from backend.schemas import (
     EvaluationResult,
     ReviewRole,
@@ -44,6 +45,8 @@ class LLMProvider(ABC):
         user_constraints: str | None,
         iteration: int,
         revision_plan: RevisionPlan | None,
+        baseline_prd: str | None = None,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> AsyncIterator[ProviderTextEvent]: ...
 
     @abstractmethod
@@ -53,6 +56,7 @@ class LLMProvider(ABC):
         role: ReviewRole,
         prd: str,
         iteration: int,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult: ...
 
     @abstractmethod
@@ -62,6 +66,7 @@ class LLMProvider(ABC):
         evaluation: EvaluationResult,
         iteration: int,
         user_override: str | None,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult: ...
 
     @abstractmethod
@@ -72,4 +77,5 @@ class LLMProvider(ABC):
         raw_value: Any,
         validation_error: str,
         role: ReviewRole | None = None,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult: ...

@@ -55,13 +55,25 @@ export function toTraceItem(event: RunEvent): TraceItem | null {
     case "review_completed": {
       const role = text(payload.role, "reviewer").toLowerCase();
       const roleLabel = REVIEW_ROLE_LABELS[role] ?? "独立";
-      const feedbackCount = Array.isArray(payload.feedback)
-        ? payload.feedback.length
-        : 0;
+      // Only the count is projected, never the finding text: the trace is a
+      // running log, and reviewer prose belongs to the review panel. The tally
+      // separates blockers from advice, because "3 条反馈" alone is what made a
+      // finished run look unfinished.
+      const feedback = Array.isArray(payload.feedback) ? payload.feedback : [];
+      const blocking = feedback.filter(
+        (item) =>
+          typeof item === "object" &&
+          item !== null &&
+          (item as { severity?: unknown }).severity === "must_fix",
+      ).length;
+      const detail =
+        blocking > 0
+          ? `第 ${event.iteration} 轮评审完成 · ${feedback.length} 条反馈（${blocking} 项必须修复）。`
+          : `第 ${event.iteration} 轮评审完成 · ${feedback.length} 条反馈。`;
       return {
         sequence: event.sequence,
         label: `${roleLabel}评审`,
-        detail: `第 ${event.iteration} 轮评审完成 · ${feedbackCount} 条反馈。`,
+        detail,
         tone: "success",
       };
     }
@@ -110,17 +122,23 @@ export function toTraceItem(event: RunEvent): TraceItem | null {
     case "run_completed":
       return {
         sequence: event.sequence,
-        label: "已达到质量门槛",
-        detail: "任务已成功完成。",
+        label: "质量门禁已通过",
+        detail: "评分达到目标，且没有必须修复的问题。",
         tone: "success",
       };
-    case "max_iterations_reached":
+    case "max_iterations_reached": {
+      const blocking =
+        typeof payload.must_fix_count === "number" ? payload.must_fix_count : 0;
       return {
         sequence: event.sequence,
         label: "已达迭代上限",
-        detail: "当前质量最高的 PRD 已准备好。",
+        detail:
+          blocking > 0
+            ? `迭代预算已用尽，仍有 ${blocking} 项必须修复问题未解决。`
+            : "当前质量最高的 PRD 已准备好。",
         tone: "warning",
       };
+    }
     case "run_failed":
       return {
         sequence: event.sequence,

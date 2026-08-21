@@ -14,8 +14,12 @@ from pydantic import BaseModel
 from backend.errors import (
     InvalidModelError,
     ProviderAuthenticationError,
+    ProviderForbiddenError,
+    ProviderInsufficientBalanceError,
+    ProviderRequestRejectedError,
     RetryableProviderError,
 )
+from backend.language import DEFAULT_OUTPUT_LANGUAGE, language_directive
 from backend.prompts import (
     GENERATOR_SYSTEM_PROMPT,
     OPTIMIZER_SYSTEM_PROMPT,
@@ -52,12 +56,14 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         base_url: str,
         model: str,
         request_timeout_seconds: float,
+        max_output_tokens: int | None = None,
         extra_body: dict[str, object] | None = None,
         client: Any | None = None,
     ) -> None:
         self.provider_name = provider_name
         self.model = model
         self.request_timeout_seconds = request_timeout_seconds
+        self.max_output_tokens = max_output_tokens
         self.extra_body = extra_body
         self.client: Any = client or AsyncOpenAI(
             api_key=api_key,
@@ -67,7 +73,31 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         )
 
     @staticmethod
-    def _translate_error(error: Exception) -> Exception:
+    def _translate_status(status_code: int) -> Exception | None:
+        """Map an HTTP status onto a stable internal provider error.
+
+        Anything not listed here falls through to the caller, where the
+        workflow's ``ProviderError`` handler still keeps it off the wire; adding
+        a status only makes the resulting code and retry decision precise.
+        """
+        if status_code == 401:
+            return ProviderAuthenticationError("Provider authentication failed")
+        if status_code == 402:
+            return ProviderInsufficientBalanceError("Provider balance exhausted")
+        if status_code == 403:
+            return ProviderForbiddenError("Provider denied access")
+        if status_code in {400, 404}:
+            return InvalidModelError("Provider rejected the configured model")
+        if status_code in {408, 409, 429}:
+            return RetryableProviderError("Provider transient status")
+        if status_code == 422:
+            return ProviderRequestRejectedError("Provider rejected the payload")
+        if status_code >= 500:
+            return RetryableProviderError("Provider service unavailable")
+        return None
+
+    @classmethod
+    def _translate_error(cls, error: Exception) -> Exception:
         if isinstance(error, openai.AuthenticationError):
             return ProviderAuthenticationError("Provider authentication failed")
         if isinstance(error, openai.APITimeoutError | openai.APIConnectionError):
@@ -75,10 +105,9 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         if isinstance(error, openai.RateLimitError):
             return RetryableProviderError("Provider rate limit reached")
         if isinstance(error, openai.APIStatusError):
-            if error.status_code in {400, 404}:
-                return InvalidModelError("Provider rejected the configured model")
-            if error.status_code >= 500:
-                return RetryableProviderError("Provider service unavailable")
+            translated = cls._translate_status(error.status_code)
+            if translated is not None:
+                return translated
         return error
 
     @staticmethod
@@ -116,7 +145,21 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             await result
 
     def _request_options(self) -> dict[str, object]:
-        return {"extra_body": self.extra_body} if self.extra_body is not None else {}
+        """Kwargs shared by the streaming and structured calls.
+
+        ``max_tokens`` is a first-class Chat Completions parameter, so it goes at
+        the top level rather than into ``extra_body`` -- which stays reserved for
+        vendor-only fields such as DeepSeek's ``thinking``. Sent explicitly, the
+        output ceiling is a configured number instead of whatever server-side
+        default the endpoint happens to apply, and a ``finish_reason`` of
+        ``length`` then means "hit our own limit" and can be retried honestly.
+        """
+        options: dict[str, object] = {}
+        if self.max_output_tokens is not None:
+            options["max_tokens"] = self.max_output_tokens
+        if self.extra_body is not None:
+            options["extra_body"] = self.extra_body
+        return options
 
     async def stream_prd(
         self,
@@ -126,13 +169,21 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         user_constraints: str | None,
         iteration: int,
         revision_plan: RevisionPlan | None,
+        baseline_prd: str | None = None,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> AsyncIterator[ProviderTextEvent]:
         stream: Any | None = None
         try:
             stream = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": GENERATOR_SYSTEM_PROMPT},
+                    {
+                        "role": "system",
+                        "content": (
+                            f"{GENERATOR_SYSTEM_PROMPT}\n\n"
+                            f"{language_directive(output_language)}"
+                        ),
+                    },
                     {
                         "role": "user",
                         "content": self._untrusted_payload(
@@ -145,6 +196,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                                 if revision_plan is not None
                                 else None
                             ),
+                            baseline_prd=baseline_prd,
                         ),
                     },
                 ],
@@ -153,9 +205,17 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                 timeout=self.request_timeout_seconds,
                 **self._request_options(),
             )
+            # The reason arrives on whichever chunk closes the choice, which is
+            # normally *before* the usage-only final chunk. Remembering it lets
+            # the terminal event report what the provider actually said instead
+            # of asserting a clean stop that may not have happened.
+            finish_reason: str | None = None
             async for chunk in stream:
                 choices = _field(chunk, "choices", [])
                 for choice in choices:
+                    chunk_reason = _field(choice, "finish_reason")
+                    if chunk_reason:
+                        finish_reason = str(chunk_reason)
                     delta = _field(_field(choice, "delta"), "content")
                     if delta:
                         yield ProviderTextEvent(
@@ -166,7 +226,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                 if chunk_usage is not None:
                     yield ProviderTextEvent(
                         model=str(_field(chunk, "model", self.model)),
-                        finish_reason="stop",
+                        finish_reason=finish_reason,
                         usage=self._usage(chunk_usage),
                     )
         except asyncio.CancelledError:
@@ -186,6 +246,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         model_type: type[BaseModel],
         instructions: str,
         input_text: str,
+        output_language: str,
     ) -> ProviderStructuredResult:
         schema = json.dumps(
             to_strict_json_schema(model_type),
@@ -199,7 +260,8 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                     {
                         "role": "system",
                         "content": (
-                            f"{instructions}\nReturn one JSON object matching this "
+                            f"{instructions}\n{language_directive(output_language)}\n"
+                            f"Return one JSON object matching this "
                             f"JSON Schema exactly:\n{schema}"
                         ),
                     },
@@ -242,6 +304,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         role: ReviewRole,
         prd: str,
         iteration: int,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult:
         return await self._structured(
             model_type=RoleReview,
@@ -251,6 +314,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                 prd=prd,
                 iteration=iteration,
             ),
+            output_language=output_language,
         )
 
     async def generate_revision_plan(
@@ -259,6 +323,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         evaluation: EvaluationResult,
         iteration: int,
         user_override: str | None,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult:
         return await self._structured(
             model_type=RevisionPlan,
@@ -268,6 +333,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                 iteration=iteration,
                 user_override=user_override,
             ),
+            output_language=output_language,
         )
 
     async def repair_structured(
@@ -277,6 +343,7 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         raw_value: Any,
         validation_error: str,
         role: ReviewRole | None = None,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult:
         model_type: type[BaseModel] = RoleReview if kind == "review" else RevisionPlan
         instructions = (
@@ -294,4 +361,5 @@ class OpenAICompatibleLLMProvider(LLMProvider):
                 invalid_value=raw_value,
                 validation_error=validation_error[:4000],
             ),
+            output_language=output_language,
         )

@@ -46,6 +46,9 @@ test("network loss between reviewer events replays without duplicates", async ({
   context,
 }) => {
   const runId = await startRun(page);
+  // The trace tab is where reviewer progress is logged now, so that is where
+  // this waits for the run to be mid-review before pulling the network.
+  await page.getByTestId("workspace-tab-trace").click();
   await expect(page.getByText("技术评审").first()).toBeVisible();
   const runUrl = page.url();
   await context.setOffline(true);
@@ -59,7 +62,9 @@ test("network loss between reviewer events replays without duplicates", async ({
   const sequences = events.map((event) => event.sequence);
   expect(new Set(sequences).size).toBe(sequences.length);
   expect(snapshot.versions).toHaveLength(2);
-  await expect(page.getByRole("tab")).toHaveCount(2);
+  await expect(page.getByRole("tab", { name: /^v\d/ })).toHaveCount(2);
+
+  await page.getByTestId("workspace-tab-trace").click();
   const renderedSequences = await page
     .getByTestId("trace-event")
     .evaluateAll((items) =>
@@ -67,6 +72,8 @@ test("network loss between reviewer events replays without duplicates", async ({
     );
   expect(renderedSequences.length).toBeGreaterThan(0);
   expect(new Set(renderedSequences).size).toBe(renderedSequences.length);
+
+  await page.getByTestId("workspace-tab-review").click();
   await expect(page.getByText("技术评审").first()).toBeVisible();
   await expect(page.getByText("体验评审").first()).toBeVisible();
   await expect(page.getByText("商业评审").first()).toBeVisible();

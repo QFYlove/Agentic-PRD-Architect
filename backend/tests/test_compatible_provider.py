@@ -9,7 +9,15 @@ import httpx
 import openai
 import pytest
 
-from backend.errors import ProviderAuthenticationError, RetryableProviderError
+from backend.errors import (
+    InvalidModelError,
+    ProviderAuthenticationError,
+    ProviderError,
+    ProviderForbiddenError,
+    ProviderInsufficientBalanceError,
+    ProviderRequestRejectedError,
+    RetryableProviderError,
+)
 from backend.providers.compatible import OpenAICompatibleLLMProvider
 from backend.schemas import (
     EvaluationResult,
@@ -89,6 +97,7 @@ def provider(
     outcomes: list[object],
     *,
     provider_name: str = "deepseek",
+    max_output_tokens: int | None = None,
 ) -> tuple[OpenAICompatibleLLMProvider, FakeCompletions]:
     completions = FakeCompletions(outcomes)
     client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
@@ -99,6 +108,7 @@ def provider(
             base_url="https://provider.invalid",
             model="provider-test-model",
             request_timeout_seconds=3,
+            max_output_tokens=max_output_tokens,
             extra_body={"thinking": {"type": "disabled"}},
             client=client,
         ),
@@ -213,6 +223,84 @@ async def test_translates_sdk_errors(
         await collect_stream(adapter)
 
 
+def status_error(status_code: int) -> openai.APIStatusError:
+    request = httpx.Request("POST", "https://provider.invalid")
+    response = httpx.Response(status_code, request=request)
+    return openai.APIStatusError(
+        "provider said: sk-secret-key-leak",
+        response=response,
+        body=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected", "code", "retryable"),
+    [
+        (400, InvalidModelError, "PROVIDER_MODEL_INVALID", False),
+        (401, ProviderAuthenticationError, "PROVIDER_AUTHENTICATION_FAILED", False),
+        (
+            402,
+            ProviderInsufficientBalanceError,
+            "PROVIDER_INSUFFICIENT_BALANCE",
+            False,
+        ),
+        (403, ProviderForbiddenError, "PROVIDER_FORBIDDEN", False),
+        (404, InvalidModelError, "PROVIDER_MODEL_INVALID", False),
+        (408, RetryableProviderError, "PROVIDER_TEMPORARY_ERROR", True),
+        (409, RetryableProviderError, "PROVIDER_TEMPORARY_ERROR", True),
+        (422, ProviderRequestRejectedError, "PROVIDER_REQUEST_REJECTED", False),
+        (429, RetryableProviderError, "PROVIDER_TEMPORARY_ERROR", True),
+        (500, RetryableProviderError, "PROVIDER_TEMPORARY_ERROR", True),
+        (502, RetryableProviderError, "PROVIDER_TEMPORARY_ERROR", True),
+        (503, RetryableProviderError, "PROVIDER_TEMPORARY_ERROR", True),
+    ],
+)
+async def test_status_codes_map_to_stable_codes_without_leaking_detail(
+    status_code: int,
+    expected: type[ProviderError],
+    code: str,
+    retryable: bool,
+) -> None:
+    adapter, _ = provider([status_error(status_code)])
+
+    with pytest.raises(expected) as excinfo:
+        await collect_stream(adapter)
+
+    assert excinfo.value.code == code
+    assert excinfo.value.retryable is retryable
+    # The user-facing message never carries provider-supplied text.
+    assert "sk-secret-key-leak" not in excinfo.value.user_message
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected"),
+    [
+        (402, ProviderInsufficientBalanceError),
+        (403, ProviderForbiddenError),
+        (429, RetryableProviderError),
+    ],
+)
+async def test_structured_calls_share_the_status_mapping(
+    status_code: int,
+    expected: type[ProviderError],
+) -> None:
+    adapter, _ = provider([status_error(status_code)])
+
+    with pytest.raises(expected):
+        await adapter.generate_review(
+            role=ReviewRole.TECH,
+            prd="# PRD",
+            iteration=1,
+        )
+
+
+async def test_unmapped_status_is_left_untranslated() -> None:
+    adapter, _ = provider([status_error(418)])
+
+    with pytest.raises(openai.APIStatusError):
+        await collect_stream(adapter)
+
+
 def valid_review() -> dict[str, object]:
     return {
         "role": "tech",
@@ -299,3 +387,124 @@ async def test_missing_usage_fails_predictably() -> None:
             prd="# PRD",
             iteration=1,
         )
+
+
+def closing_delta(content: str, finish_reason: str) -> SimpleNamespace:
+    """The chunk that closes a choice: it carries the real ``finish_reason``."""
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content=content),
+                finish_reason=finish_reason,
+            )
+        ],
+        usage=None,
+        model="provider-test-model",
+    )
+
+
+def usage_only_chunk() -> SimpleNamespace:
+    return SimpleNamespace(choices=[], usage=usage(), model="provider-test-model")
+
+
+async def test_max_tokens_is_sent_top_level_and_leaves_extra_body_untouched() -> None:
+    """The output ceiling must be ours, not the endpoint's undocumented default."""
+    adapter, calls = provider(
+        [FakeStream([delta("# PRD"), usage_only_chunk()])],
+        max_output_tokens=16_000,
+    )
+
+    await collect_stream(adapter)
+
+    assert calls.calls[0]["max_tokens"] == 16_000
+    assert calls.calls[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
+async def test_structured_calls_send_the_same_output_ceiling() -> None:
+    adapter, calls = provider([response(valid_review())], max_output_tokens=12_000)
+
+    await adapter.generate_review(role=ReviewRole.TECH, prd="# PRD", iteration=1)
+
+    assert calls.calls[0]["max_tokens"] == 12_000
+
+
+async def test_unset_ceiling_omits_max_tokens_entirely() -> None:
+    adapter, calls = provider([FakeStream([delta("# PRD"), usage_only_chunk()])])
+
+    await collect_stream(adapter)
+
+    assert "max_tokens" not in calls.calls[0]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["stop", "length", "content_filter", "insufficient_system_resource"],
+)
+async def test_streaming_reports_the_providers_own_finish_reason(reason: str) -> None:
+    """The reason used to be hardcoded to ``stop``, which hid every truncation."""
+    adapter, _ = provider(
+        [
+            FakeStream(
+                [delta("# PRD"), closing_delta("\nBody", reason), usage_only_chunk()]
+            )
+        ]
+    )
+
+    events = await collect_stream(adapter)
+
+    terminal = events[-1]
+    assert terminal.usage is not None
+    assert terminal.finish_reason == reason
+    assert "".join(event.delta for event in events) == "# PRD\nBody"
+
+
+async def test_absent_finish_reason_stays_absent_rather_than_becoming_stop() -> None:
+    adapter, _ = provider([FakeStream([delta("# PRD"), usage_only_chunk()])])
+
+    events = await collect_stream(adapter)
+
+    assert events[-1].finish_reason is None
+
+
+async def test_chinese_language_directive_reaches_generator_and_reviewer() -> None:
+    stream_adapter, stream_calls = provider(
+        [FakeStream([delta("# 产品需求文档"), usage_only_chunk()])]
+    )
+    async for _ in stream_adapter.stream_prd(
+        user_idea="做一个播客按集付费的订阅产品。",
+        target_audience="听众",
+        user_constraints=None,
+        iteration=1,
+        revision_plan=None,
+        output_language="zh",
+    ):
+        pass
+    review_adapter, review_calls = provider([response(valid_review())])
+    await review_adapter.generate_review(
+        role=ReviewRole.BIZ,
+        prd="# 产品需求文档",
+        iteration=1,
+        output_language="zh",
+    )
+
+    for calls in (stream_calls, review_calls):
+        assert "Chinese (简体中文)" in calls.calls[0]["messages"][0]["content"]
+
+
+async def test_baseline_prd_is_handed_to_the_generator_as_untrusted_data() -> None:
+    """Without the previous document in the prompt, every round is a rewrite."""
+    adapter, calls = provider([FakeStream([delta("# PRD"), usage_only_chunk()])])
+
+    async for _ in adapter.stream_prd(
+        user_idea="Build a podcast micro-subscription.",
+        target_audience=None,
+        user_constraints=None,
+        iteration=2,
+        revision_plan=None,
+        baseline_prd="# Baseline PRD\n## Keep This Section",
+    ):
+        pass
+
+    user_message = calls.calls[0]["messages"][1]["content"]
+    assert "## Keep This Section" in user_message
+    assert "untrusted product data" in user_message

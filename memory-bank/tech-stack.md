@@ -173,33 +173,29 @@ Tailwind 用于：
 
 ### 4.6 Mermaid.js
 
-Mermaid 用于动态展示：
+Mermaid 用于渲染 PRD 正文里模型写出的 ` ```mermaid ` 代码块。
 
-```text
-Generator
-  → Tech / UX / Biz Reviewers
-  → Aggregator
-  → Quality Gate
-  → Optimizer
-  → Generator
-```
+支持的图表类型是一份白名单：`flowchart`（含 Mermaid 旧别名 `graph`）、
+`sequenceDiagram`、`stateDiagram-v2`、`mindmap`、`erDiagram`。白名单之外的类型
+不进入渲染路径，直接按代码块显示源码。
 
 使用约束：
 
-- 仅在 `useEffect` 内初始化和渲染。
-- 每次渲染使用唯一 ID。
-- Mermaid 文本由本地模板生成，不直接拼接用户输入。
-- 活动节点通过状态映射添加 CSS class。
-- 渲染失败时降级为普通步骤列表，不能影响主流程。
+- `await import("mermaid")` 放在 effect 内：不含图表的 PRD 永远不会下载这个库。
+- `startOnLoad: false`，由组件显式调用 `mermaid.render`。
+- `securityLevel: "strict"` 且 `htmlLabels: false`：标签里的 HTML 是文本，不是标记。
+  模型输出不得被当作 HTML 或 JS 执行。
+- 每次渲染使用唯一 DOM ID。
+- 先 `parse` 再 `render`：定义无法解析时降级显示图表源码，而不是让 Mermaid 往文档里
+  插入一张红色 "Syntax error" 图，也不能影响 PRD 其余部分的渲染。
 
 ### 4.7 Recharts
 
-Recharts 用于展示版本评分：
+Recharts（`RadarScoreChart`）用于展示版本评分：
 
 - 三个轴：Technical、UX、Business。
 - 每个 PRD 版本一条数据系列。
 - 固定量程 0–100。
-- 同时支持 v1、v2、v3。
 
 图表只是可视化，具体分值还必须以文本形式展示，保证移动端和无障碍可读性。
 
@@ -214,11 +210,13 @@ remark-gfm
 
 安全规则：
 
-- 不启用 `rehype-raw`。
+- 不启用 `rehype-raw`；`skipHtml` 打开。
 - 不渲染模型输出中的原始 HTML。
+- `remark-gfm` 提供表格支持，PRD 中的表格按 GFM 渲染。
 - 链接使用安全属性。
-- 代码块作为文本显示，不执行。
-- 下载使用原始 Markdown，而不是渲染后的 HTML。
+- 代码块作为文本显示，不执行；`mermaid` 块交由 §4.6 的白名单路径处理。
+- 下载使用原始 UTF-8 Markdown，而不是渲染后的 HTML；completion sentinel 在展示与
+  下载前都已剥离。
 
 ### 4.9 前端状态管理
 
@@ -373,6 +371,13 @@ OpenAI SDK 在第一版中作为异步 OpenAI 兼容协议客户端，用于接�
 - Reviewer Structured Output。
 - Optimizer Structured Output。
 - Token Usage 获取。
+- 每次调用的 `finish_reason`。
+
+`finish_reason` 不是可选的诊断信息，而是判定生成是否完整的两个独立信号之一（另一个
+是模型写在正文最后一行的 completion sentinel，见 design-document §6.8）。因此适配器
+必须把它随文本一起返回，而不是只返回 content。`max_tokens` 由
+`LLM_MAX_OUTPUT_TOKENS` 显式发送，使 `finish_reason="length"` 报告的是一个已配置的
+上限。
 
 具体模型名称不写死在业务代码中：
 
@@ -638,6 +643,12 @@ http://127.0.0.1:4321
 - Estimated Cost。
 - 当前轮次。
 - 三个 Reviewer 状态。
+- Per-node timing：每次节点调用的节点名、版本、attempt、墙钟秒数与 Token。
+
+Per-node timing 也记录失败的尝试——一次消耗了 Token 却产出不可用文档的 Generator
+尝试必须出现在列表里，否则记录时间无法与总耗时对上。`node_timings` 不是快照的必需
+字段：早于它的历史快照没有这一项，遥测列表读不懂的数据一律丢弃，不能因此让一份已
+完成的 PRD 无法渲染。
 
 模型价格通过后端配置维护，前端不自行计算。
 
@@ -669,11 +680,17 @@ http://127.0.0.1:4321
 
 - LangGraph 路由。
 - Reviewer 并行。
-- 分数聚合。
+- 分数聚合与质量门（`score >= target` 与 `must_fix == 0` 两个条件各自成立才通过）。
+- 反馈 severity 计数按需推导，不作为总数持久化。
 - 最大轮次。
 - Pause/Resume/Cancel。
 - Structured Output 重试。
-- SSE 格式和事件补发。
+- 生成完整性判定：`finish_reason` 与 completion sentinel 两个信号，及三种失败原因对应
+  的错误码。
+- 后续版本生成失败时保留已提交的版本。
+- Per-node timing 记录（含失败尝试）。
+- SSE 格式、事件补发和快照重校准。
+- SQLite 快照 / 事件的 JSON 往返。
 
 ### 10.2 前端
 
@@ -687,14 +704,16 @@ http://127.0.0.1:4321
 重点覆盖：
 
 - Reducer 去重和状态迁移。
-- PRD delta 拼接。
-- 版本选择。
+- PRD delta 拼接与流重置。
+- 版本选择、版本对比（阅读 / 源码两种视图）。
 - 控制按钮状态。
-- Markdown 安全渲染。
+- 终态展示：质量门未通过的原因、最佳版本、severity 计数。
+- 失败提示指名失败的版本，而不是宣称整个任务失败。
+- Markdown 安全渲染（GFM 表格、`skipHtml`、Mermaid 白名单与降级）。
 
 ### 10.3 E2E
 
-使用 Playwright 启动前后端，并在 Mock 模式下验证：
+使用 Playwright 启动前后端（独立端口 8011/4331），并在 Mock 模式下验证：
 
 - Podcast 微订阅案例从 v1 迭代到 v2。
 - 三个 Reviewer 并行可见。
@@ -702,6 +721,10 @@ http://127.0.0.1:4321
 - 暂停、补充要求和恢复。
 - 下载最终 Markdown。
 - SSE 断线后的恢复。
+- 版本轨 + 五个工作区页签的布局。
+- Mermaid 渲染与解析失败降级。
+- 运行记录中的 per-node timing。
+- 仅测试环境启用的故障注入路径。
 
 ---
 
@@ -719,10 +742,10 @@ http://127.0.0.1:4321
 建议命令：
 
 ```bash
-ruff check backend
-ruff format --check backend
-mypy backend
-pytest
+./.venv/bin/ruff check backend
+./.venv/bin/ruff format --check backend
+./.venv/bin/mypy backend
+./.venv/bin/python -m pytest -p no:cacheprovider
 ```
 
 ### 11.2 TypeScript
@@ -740,9 +763,12 @@ pytest
 ```bash
 npm run lint
 npm run typecheck
-npm run test
+npm run test:run
 npm run build
+npm run test:e2e
 ```
+
+`npm run test` 是 watch 模式，单次执行用 `test:run`。
 
 格式化工具不应自动重写模型生成的 PRD 内容。
 
@@ -799,10 +825,13 @@ Browser
   └── FastAPI/Uvicorn  :8000
         ├── LangGraph
         ├── RunManager
-        ├── InMemoryRunStore
-        ├── EventStore
+        ├── SQLiteRunStore（继承 InMemoryRunStore，热缓存 + SQLite 快照）
+        ├── SQLiteEventStore（可回放事件）
         └── Mock/DeepSeek/GLM Provider
 ```
+
+Uvicorn 必须保持单 Worker：Task 句柄、Run 锁、Pause/Resume/Cancel 信号和 SSE 订阅
+Condition 都在进程内。
 
 ### 13.2 环境变量
 
@@ -813,9 +842,12 @@ APP_ENV=development
 APP_HOST=127.0.0.1
 APP_PORT=8000
 FRONTEND_ORIGINS=http://localhost:4321,http://127.0.0.1:4321
+PUBLIC_API_BASE_URL=http://127.0.0.1:8000
 
 ENABLE_MOCK_LLM=true
 LLM_PROVIDER=deepseek
+LLM_REQUEST_TIMEOUT_SECONDS=90
+LLM_MAX_OUTPUT_TOKENS=16000
 DEEPSEEK_API_KEY=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-v4-flash
@@ -829,10 +861,15 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 DEFAULT_QUALITY_THRESHOLD=85
 DEFAULT_MAX_ITERATIONS=3
 MAX_CONCURRENT_RUNS=4
-RUN_TTL_SECONDS=3600
+MAX_RETAINED_RUNS=100
+RUN_TTL_SECONDS=2592000
 EVENT_BUFFER_SIZE=1000
 SSE_HEARTBEAT_SECONDS=15
+DATABASE_PATH=data/agentic-prd.sqlite3
 ```
+
+完整键列表见 `.env.example`。`LLM_MAX_OUTPUT_TOKENS` 会作为 `max_tokens` 显式发送，
+使 `finish_reason="length"` 指向一个已配置的上限而不是随模型变化的 Provider 默认值。
 
 前端只允许读取公开配置，例如 API Base URL；任何密钥必须只存在于后端环境。
 
@@ -841,7 +878,7 @@ SSE_HEARTBEAT_SECONDS=15
 后端：
 
 ```bash
-python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
+./.venv/bin/python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 前端：
@@ -891,8 +928,8 @@ npm run dev
 | WebSocket | 当前主要是服务端单向推送，REST + SSE 更简单 |
 | Redux/Zustand | 单页面运行状态可由 Hook + Reducer 管理 |
 | Celery/RQ | 本地单进程 Showcase 不需要外部 Worker |
-| Redis/PostgreSQL | 第一版接受服务重启后状态丢失 |
-| ORM | 没有数据库 |
+| Redis/PostgreSQL | SQLite 已满足本地持久化，外部服务不属于当前范围 |
+| ORM | SQLite 直接使用标准库 `sqlite3` 和 JSON 快照，规模不需要 ORM |
 | Docker/Kubernetes | 不属于核心交付要求 |
 | 完整 LangChain 包 | LangGraph + Provider SDK 已满足需求 |
 | Anthropic SDK | Provider 接口预留，但第一版不要求实现 |
@@ -974,23 +1011,41 @@ mypy
 | `src/pages/index.astro` | Astro |
 | `src/layouts/Layout.astro` | Astro、Tailwind |
 | `src/components/*.tsx` | React、TypeScript、Tailwind |
-| `src/components/WorkflowDiagram.tsx` | Mermaid.js |
+| `src/components/WorkflowDiagram.tsx` | React、Lucide（本地静态流程图，不用 Mermaid） |
+| `src/components/MermaidBlock.tsx` | Mermaid.js 懒加载、白名单与降级 |
 | `src/components/RadarScoreChart.tsx` | Recharts |
-| `src/components/PRDViewer.tsx` | react-markdown、remark-gfm |
+| `src/components/PRDViewer.tsx` | react-markdown、remark-gfm、`skipHtml` |
+| `src/components/VersionRail.tsx` / `WorkspaceTabs.tsx` | 版本轨与五个工作区页签 |
+| `src/components/ReviewPanel.tsx` / `RevisionPlanPanel.tsx` | 评审反馈与 Revision Plan 展示 |
+| `src/components/VersionDiff.tsx` | 阅读对比 / 源码两种视图 |
+| `src/components/OutcomePanel.tsx` | 终态与失败展示 |
+| `src/components/TelemetryPanel.tsx` / `AgentTrace.tsx` | 运行指标与运行记录 |
 | `src/hooks/useAgentRun.ts` | EventSource、fetch、React Hooks |
 | `src/lib/runReducer.ts` | TypeScript、React Reducer |
+| `src/lib/contracts.ts` | 快照与事件 payload 解析、severity 归一化 |
+| `src/lib/diff.ts` / `readingDiff.ts` | 版本对比计算 |
+| `src/lib/outcomeSummary.ts` / `failureNotice.ts` | 终态摘要与失败提示文案 |
+| `src/lib/nodeTimings.ts` | Per-node timing 归一化 |
+| `src/lib/errorMessages.ts` | 错误码到中文文案映射 |
 | `backend/main.py` | FastAPI、CORS、SSE |
 | `backend/config.py` | pydantic-settings |
 | `backend/schemas.py` | Pydantic |
-| `backend/workflow.py` | LangGraph、asyncio |
+| `backend/workflow.py` | LangGraph、asyncio、Aggregator 与质量门 |
+| `backend/prd_document.py` | completion sentinel 与 `finish_reason` 完整性判定 |
+| `backend/language.py` | 输出语言约束 |
+| `backend/state_machine.py` | Run 状态迁移合法性 |
+| `backend/telemetry.py` | Token、耗时与 per-node timing |
+| `backend/errors.py` | 应用错误码 |
 | `backend/run_manager.py` | asyncio、RunStore/EventStore |
-| `backend/event_store.py` | asyncio.Condition、SSE event buffer |
+| `backend/run_store.py` | InMemoryRunStore / SQLiteRunStore |
+| `backend/event_store.py` | asyncio.Condition、SSE event buffer、SQLiteEventStore |
 | `backend/providers/base.py` | Provider Protocol 与统一结果类型 |
 | `backend/providers/compatible.py` | DeepSeek/GLM OpenAI 兼容适配器 |
 | `backend/providers/mock.py` | 异步生成器、确定性 Fixture |
 | `backend/providers/scenario.py` | E2E 故障注入 |
 | `backend/observability.py` | 结构化安全日志 |
 | `backend/tests/` | pytest、pytest-asyncio、HTTPX |
+| `e2e/` | Playwright（含 `layout.spec.ts`、`failures.spec.ts`、`recovery.spec.ts`） |
 
 ---
 
@@ -1007,13 +1062,14 @@ mypy
 - Pydantic 能校验所有 Reviewer 和 Optimizer 输出。
 - REST 控制与 GET SSE 订阅可以独立工作。
 - EventSource 可以重连并按事件 ID 补发。
-- Mermaid 和 Recharts 只在客户端渲染。
-- Markdown 渲染不允许原始 HTML。
+- Mermaid 和 Recharts 只在客户端渲染；Mermaid 首次用到时才加载。
+- Markdown 渲染不允许原始 HTML，GFM 表格可用。
 - Mock 模式无需外部 API Key。
+- 对话、快照和可回放事件在 SQLite 中持久化，重启后历史可浏览。
 - 后端 pytest 通过。
 - 前端单元测试和 build 通过。
 - Podcast 微订阅场景的 Playwright E2E 通过。
-- 项目不依赖数据库、Redis、WebSocket 或外部任务队列。
+- 项目不依赖外部数据库、Redis、WebSocket 或外部任务队列（本地 SQLite 除外）。
 
 ---
 
@@ -1043,7 +1099,7 @@ Python 3.11+
   + asyncio
 
 State and Transport
-InMemory RunStore / EventStore
+SQLiteRunStore / SQLiteEventStore（进程内热缓存 + SQLite 持久化）
   + REST control APIs
   + Native EventSource SSE
 

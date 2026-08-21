@@ -4,6 +4,8 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
+from backend.language import DEFAULT_OUTPUT_LANGUAGE
+from backend.prd_document import PRD_COMPLETION_MARKER
 from backend.providers.base import (
     LLMProvider,
     ProviderStructuredResult,
@@ -11,6 +13,8 @@ from backend.providers.base import (
 )
 from backend.schemas import (
     EvaluationResult,
+    FeedbackItem,
+    FeedbackSeverity,
     ReviewRole,
     RevisionItem,
     RevisionPlan,
@@ -26,19 +30,122 @@ SCORES: dict[ReviewRole, tuple[int, ...]] = {
     ReviewRole.BIZ: (78, 87, 89, 91, 93),
 }
 
-FEEDBACK: dict[ReviewRole, tuple[str, ...]] = {
+#: Findings a first draft genuinely blocks on: each names an unbuildable core
+#: flow or a real risk, matching the `must_fix` criteria in the reviewer rubric.
+BLOCKING_FEEDBACK: dict[ReviewRole, tuple[str, str]] = {
     ReviewRole.TECH: (
-        "Define payment gateway failure handling and idempotent retries.",
-        "Add fraud detection, rate limits, and audit logging.",
+        "Payment gateway failures have no defined handling, so the purchase "
+        "flow cannot be built.",
+        "Specify idempotent retries, timeout behaviour, and a terminal failure "
+        "state for every gateway call.",
     ),
     ReviewRole.UX: (
-        "Document refund status, offline recovery, and accessible errors.",
-        "Add clear retry, receipt, and account-history journeys.",
+        "A failed purchase leaves the listener with no visible state, so the "
+        "core journey dead-ends.",
+        "Define the failure screen, its retry affordance, and an accessible "
+        "error announcement.",
     ),
     ReviewRole.BIZ: (
-        "Define refund economics and creator payout reconciliation.",
-        "Add guardrail metrics for disputes, churn, and fraud.",
+        "Refunds move money with no stated policy, which is an unmanaged "
+        "financial and compliance risk.",
+        "Define refund eligibility, who approves it, and how a refund settles "
+        "against the creator payout.",
     ),
+}
+
+#: Real gaps that do not stop the document from shipping.
+IMPROVEMENT_FEEDBACK: dict[ReviewRole, tuple[str, str]] = {
+    ReviewRole.TECH: (
+        "Fraud protection is described qualitatively.",
+        "Add velocity limits, audit events, and a manual review queue.",
+    ),
+    ReviewRole.UX: (
+        "Offline recovery is mentioned but not specified per screen.",
+        "Describe what each purchase screen shows once connectivity drops.",
+    ),
+    ReviewRole.BIZ: (
+        "Guardrail metrics have no thresholds.",
+        "Give dispute rate, churn, and fraud rate an owner and a threshold.",
+    ),
+}
+
+#: Polish. Present so the UI has a third tier to render, never a blocker.
+OPTIONAL_FEEDBACK: dict[ReviewRole, tuple[tuple[str, str], ...]] = {
+    ReviewRole.TECH: (
+        (
+            "Log retention is unspecified.",
+            "State a retention window for structured purchase logs.",
+        ),
+        (
+            "The client cache strategy could be more concrete.",
+            "Name the cache layer used for the creator catalogue.",
+        ),
+    ),
+    ReviewRole.UX: (
+        (
+            "First-run onboarding could be warmer.",
+            "Add a one-screen explanation of what a single-episode purchase is.",
+        ),
+        (
+            "Receipt wording could be friendlier.",
+            "Reword the receipt copy in the listener's own terms.",
+        ),
+    ),
+    ReviewRole.BIZ: (
+        (
+            "Pricing sensitivity is not modelled.",
+            "Add a short sensitivity table for two candidate price points.",
+        ),
+        (
+            "Creator-side reporting could go deeper.",
+            "Add a per-episode revenue breakdown to the creator dashboard.",
+        ),
+    ),
+}
+
+
+def mock_feedback(role: ReviewRole, iteration: int) -> list[FeedbackItem]:
+    """Three tiers per reviewer, with the blockers cleared after the first pass.
+
+    Iteration 1 carries one `must_fix` per role so the quality gate has
+    something real to hold the run for; from iteration 2 on only advice remains,
+    which is exactly the "score target met, suggestions still open" state the
+    dashboard has to present as finished.
+    """
+    items: list[FeedbackItem] = []
+    if iteration <= 1:
+        issue, recommendation = BLOCKING_FEEDBACK[role]
+        items.append(
+            FeedbackItem(
+                severity=FeedbackSeverity.MUST_FIX,
+                issue=issue,
+                recommendation=recommendation,
+            )
+        )
+    issue, recommendation = IMPROVEMENT_FEEDBACK[role]
+    items.append(
+        FeedbackItem(
+            severity=FeedbackSeverity.SHOULD_FIX,
+            issue=issue,
+            recommendation=recommendation,
+        )
+    )
+    items.extend(
+        FeedbackItem(
+            severity=FeedbackSeverity.OPTIONAL,
+            issue=issue,
+            recommendation=recommendation,
+        )
+        for issue, recommendation in OPTIONAL_FEEDBACK[role]
+    )
+    return items
+
+
+#: `must_fix` findings must reach the next version, so they plan as `high`.
+SEVERITY_PRIORITY: dict[FeedbackSeverity, RevisionPriority] = {
+    FeedbackSeverity.MUST_FIX: RevisionPriority.HIGH,
+    FeedbackSeverity.SHOULD_FIX: RevisionPriority.MEDIUM,
+    FeedbackSeverity.OPTIONAL: RevisionPriority.LOW,
 }
 
 
@@ -92,10 +199,18 @@ class MockLLMProvider(LLMProvider):
 - Define ownership, incident severity, rollback criteria, and support runbooks.
 - Segment metrics by platform, market, creator cohort, and accessibility mode.
 """
-        plan_summary = ""
-        if revision_plan is not None:
-            changes = "; ".join(item.required_change for item in revision_plan.items)
-            plan_summary = f"\nApplied revision plan: {changes}\n"
+        # A revision plan changes the document, never narrates itself: no
+        # "Applied revision plan:" scaffolding, and sections the plan did not
+        # name come out identical round to round (the stability test asserts
+        # that). A user override is a real requirement, so it lands as content
+        # in the section the plan targets.
+        requested = ""
+        override = revision_plan.user_override if revision_plan else None
+        if override:
+            requested = f"""
+## User Requirements
+- {override}
+"""
         return f"""# Product Requirements Document — Version {iteration}
 
 ## Product Idea
@@ -120,10 +235,11 @@ states. The MVP will validate demand while protecting user and operator trust.
 - Accessible keyboard and screen-reader behavior.
 - Structured logs without secrets or hidden model reasoning.
 - Explicit timeout, retry, and cancellation behavior.
-{improvements}{later}{plan_summary}
+{improvements}{later}{requested}
 ## Acceptance Criteria
 - Happy, empty, invalid, offline, and provider-failure paths are testable.
 - Metrics have owners, definitions, and guardrail thresholds.
+{PRD_COMPLETION_MARKER}
 """
 
     async def stream_prd(
@@ -134,7 +250,10 @@ states. The MVP will validate demand while protecting user and operator trust.
         user_constraints: str | None,
         iteration: int,
         revision_plan: RevisionPlan | None,
+        baseline_prd: str | None = None,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> AsyncIterator[ProviderTextEvent]:
+        del baseline_prd, output_language
         content = self._prd(
             user_idea,
             target_audience,
@@ -166,7 +285,9 @@ states. The MVP will validate demand while protecting user and operator trust.
         role: ReviewRole,
         prd: str,
         iteration: int,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult:
+        del output_language
         await self._sleep(self.reviewer_delay)
         score = SCORES[role][min(iteration, 5) - 1]
         value = RoleReview(
@@ -174,7 +295,7 @@ states. The MVP will validate demand while protecting user and operator trust.
             score=score,
             summary=f"{role.value.title()} review for iteration {iteration}.",
             strengths=["Clear scope", "Measurable acceptance criteria"],
-            feedback=list(FEEDBACK[role]),
+            feedback=mock_feedback(role, iteration),
         )
         input_tokens = max(1, len(prd) // 12)
         usage = TokenUsage(
@@ -194,13 +315,19 @@ states. The MVP will validate demand while protecting user and operator trust.
         evaluation: EvaluationResult,
         iteration: int,
         user_override: str | None,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult:
+        del output_language
         await self._sleep(self.optimizer_delay)
         seen: dict[str, RevisionItem] = {}
         items: list[RevisionItem] = []
         for review in (evaluation.tech, evaluation.ux, evaluation.biz):
             for feedback in review.feedback:
-                key = feedback.casefold().strip()
+                if feedback.severity is FeedbackSeverity.OPTIONAL:
+                    # Optional polish is dropped rather than padding the plan,
+                    # matching the instruction the real optimizer prompt carries.
+                    continue
+                key = feedback.issue.casefold().strip()
                 source = RevisionSource(review.role.value)
                 if key in seen:
                     existing = seen[key]
@@ -210,10 +337,10 @@ states. The MVP will validate demand while protecting user and operator trust.
                 item = RevisionItem(
                     source_role=source,
                     source_roles=[source],
-                    issue=feedback,
-                    required_change=feedback,
+                    issue=feedback.issue,
+                    required_change=feedback.recommendation,
                     target_section="Requirements",
-                    priority=RevisionPriority.HIGH,
+                    priority=SEVERITY_PRIORITY[feedback.severity],
                 )
                 seen[key] = item
                 items.append(item)
@@ -248,14 +375,21 @@ states. The MVP will validate demand while protecting user and operator trust.
         raw_value: Any,
         validation_error: str,
         role: ReviewRole | None = None,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult:
-        del validation_error
+        del validation_error, output_language
         if kind == "review" and role is not None:
             value = RoleReview(
                 role=role,
                 score=50,
                 summary="Repaired mock response.",
-                feedback=["Review the repaired response."],
+                feedback=[
+                    FeedbackItem(
+                        severity=FeedbackSeverity.SHOULD_FIX,
+                        issue="The original response was invalid.",
+                        recommendation="Review the repaired response.",
+                    )
+                ],
             ).model_dump(mode="json")
         else:
             value = RevisionPlan(

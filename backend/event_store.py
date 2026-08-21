@@ -11,6 +11,17 @@ from uuid import UUID
 from backend.errors import EventExpiredError, RunNotFoundError
 from backend.schemas import RunEvent, RunEventType
 
+TRANSIENT_EVENT_TYPES = frozenset({RunEventType.PRD_DELTA})
+"""Events that are streamed live but never persisted.
+
+``prd_delta`` carries a 128-character slice of a PRD that ``prd_generated``
+republishes in full at the end of the same generation, so persisting deltas
+costs ~96% of all event rows while adding no recoverable state. Delta events
+still enter the in-memory buffer, so an attached SSE client receives them in
+real time; a client that reconnects after they have been evicted or after a
+restart is calibrated by the snapshot plus the durable ``prd_generated`` event.
+"""
+
 
 class EventStore:
     def __init__(self, *, buffer_size: int, heartbeat_seconds: float) -> None:
@@ -133,7 +144,13 @@ class EventStore:
 
 
 class SQLiteEventStore(EventStore):
-    """Replayable events persisted to the same local SQLite database."""
+    """Replayable events persisted to the same local SQLite database.
+
+    SQLite is the source of truth for replay; the in-memory deque is only a hot
+    cache for the newest ``buffer_size`` events. ``initial_sequences`` must
+    enumerate every retained run: events belonging to any other run are treated
+    as orphans and deleted on startup.
+    """
 
     def __init__(
         self,
@@ -169,23 +186,45 @@ class SQLiteEventStore(EventStore):
             """
         )
         self._connection.commit()
+        self._adopt_retained_runs(initial_sequences)
+
+    def _adopt_retained_runs(self, initial_sequences: dict[UUID, int]) -> None:
+        """Register retained runs and drop events left behind by evicted runs."""
         for run_id, sequence in initial_sequences.items():
             self._events[run_id] = deque(maxlen=self.buffer_size)
             self._sequences[run_id] = sequence
             self._conditions[run_id] = asyncio.Condition()
+        orphans = [
+            run_id_value
+            for (run_id_value,) in self._connection.execute(
+                "SELECT DISTINCT run_id FROM run_events"
+            ).fetchall()
+            if UUID(run_id_value) not in self._events
+        ]
+        if orphans:
+            self._connection.executemany(
+                "DELETE FROM run_events WHERE run_id = ?",
+                [(run_id_value,) for run_id_value in orphans],
+            )
+            self._connection.commit()
+        for run_id in self._events:
+            self._warm_cache(run_id)
+
+    def _warm_cache(self, run_id: UUID) -> None:
+        """Fill the hot cache with the newest persisted events for one run."""
         rows = self._connection.execute(
-            "SELECT run_id, event_json FROM run_events ORDER BY run_id, sequence"
+            """
+            SELECT event_json FROM run_events
+            WHERE run_id = ?
+            ORDER BY sequence DESC
+            LIMIT ?
+            """,
+            (str(run_id), self.buffer_size),
         ).fetchall()
-        for run_id_value, event_json in rows:
-            run_id = UUID(run_id_value)
-            if run_id not in self._events:
-                continue
+        for (event_json,) in reversed(rows):
             event = RunEvent.model_validate_json(event_json)
             self._events[run_id].append(event)
-            self._sequences[run_id] = max(
-                self._sequences[run_id],
-                event.sequence,
-            )
+            self._sequences[run_id] = max(self._sequences[run_id], event.sequence)
 
     async def append(
         self,
@@ -201,6 +240,10 @@ class SQLiteEventStore(EventStore):
             iteration=iteration,
             payload=payload,
         )
+        if event in TRANSIENT_EVENT_TYPES:
+            # Live subscribers already have it from the in-memory buffer; the
+            # sequence number is still consumed so ordering stays monotonic.
+            return envelope
         self._connection.execute(
             """
             INSERT INTO run_events (run_id, sequence, event_json)
@@ -214,6 +257,48 @@ class SQLiteEventStore(EventStore):
         )
         self._connection.commit()
         return envelope
+
+    def replay(self, run_id: UUID, after_sequence: int) -> list[RunEvent]:
+        """Replay persisted events, not just the ones still in the hot cache.
+
+        The in-memory deque is bounded by ``buffer_size``, so it cannot answer
+        reconnects for long runs or for anything that predates a restart. SQLite
+        retains every durable event for a retained run, so it is the replay
+        source of truth; ``EventExpiredError`` is raised only when the requested
+        range was genuinely dropped from the database.
+
+        Transient events (see ``TRANSIENT_EVENT_TYPES``) are served only while
+        they remain in the hot cache. Falling back to SQLite therefore yields a
+        sequence with gaps where deltas were skipped -- clients must treat
+        sequence numbers as ordering, not as a dense count, and calibrate PRD
+        text from the snapshot plus the durable ``prd_generated`` event.
+        """
+        if run_id not in self._events:
+            raise RunNotFoundError
+        cached = self._events[run_id]
+        if cached and after_sequence >= cached[0].sequence - 1:
+            # The deque holds a contiguous suffix, so it already covers the
+            # whole requested range, transient events included.
+            return [
+                event.model_copy(deep=True)
+                for event in cached
+                if event.sequence > after_sequence
+            ]
+        oldest = self._connection.execute(
+            "SELECT MIN(sequence) FROM run_events WHERE run_id = ?",
+            (str(run_id),),
+        ).fetchone()[0]
+        if oldest is not None and after_sequence < oldest - 1:
+            raise EventExpiredError(int(oldest))
+        rows = self._connection.execute(
+            """
+            SELECT event_json FROM run_events
+            WHERE run_id = ? AND sequence > ?
+            ORDER BY sequence
+            """,
+            (str(run_id), after_sequence),
+        ).fetchall()
+        return [RunEvent.model_validate_json(event_json) for (event_json,) in rows]
 
     def remove_run(self, run_id: UUID) -> None:
         super().remove_run(run_id)

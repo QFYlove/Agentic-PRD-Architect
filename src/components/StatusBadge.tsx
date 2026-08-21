@@ -15,6 +15,14 @@ export const RUN_STATUS_LABELS: Record<RunStatus, string> = {
   FAILED: "运行失败",
 };
 
+/**
+ * The run's state as one short word.
+ *
+ * This is one of the three places the pill shape survives: it reads as a state,
+ * not as a container. The tone is carried by the text colour on a neutral
+ * surface rather than by a filled coloured chip -- four filled pills of four
+ * different hues was most of what made the header look like a status dashboard.
+ */
 export function StatusBadge({ status }: { status: RunStatus }) {
   const terminal = ["COMPLETED", "MAX_ITERATIONS_REACHED"].includes(status);
   const danger = ["FAILED", "CANCELLED"].includes(status);
@@ -24,14 +32,14 @@ export function StatusBadge({ status }: { status: RunStatus }) {
   return (
     <span
       data-testid="run-status"
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold ${
+      className={`tag ${
         terminal
-          ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200"
+          ? "text-ok"
           : danger
-            ? "border-rose-400/25 bg-rose-400/10 text-rose-200"
+            ? "text-danger"
             : waiting
-              ? "border-amber-400/25 bg-amber-400/10 text-amber-200"
-              : "border-cyan-400/25 bg-cyan-400/10 text-cyan-200"
+              ? "text-warn"
+              : "text-accent"
       }`}
     >
       <span

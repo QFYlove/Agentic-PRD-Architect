@@ -7,6 +7,8 @@ from pydantic import ValidationError
 from backend.schemas import (
     CreateRunRequest,
     EvaluationResult,
+    FeedbackItem,
+    FeedbackSeverity,
     NodeStatus,
     PRDRunState,
     PRDVersion,
@@ -21,12 +23,23 @@ from backend.schemas import (
 )
 
 
+def finding(
+    severity: FeedbackSeverity = FeedbackSeverity.SHOULD_FIX,
+    issue: str = "A gap",
+) -> FeedbackItem:
+    return FeedbackItem(
+        severity=severity,
+        issue=issue,
+        recommendation=f"Close: {issue}",
+    )
+
+
 def review(role: ReviewRole, score: int) -> RoleReview:
     return RoleReview(
         role=role,
         score=score,
         summary=f"{role} summary",
-        feedback=[f"{role} feedback"],
+        feedback=[finding(issue=f"{role} feedback")],
     )
 
 
@@ -146,7 +159,7 @@ def test_collection_defaults_are_not_shared() -> None:
     first = RoleReview(role=ReviewRole.TECH, score=80, summary="First")
     second = RoleReview(role=ReviewRole.TECH, score=80, summary="Second")
 
-    first.feedback.append("Only first")
+    first.feedback.append(finding(issue="Only first"))
 
     assert second.feedback == []
 
@@ -207,3 +220,104 @@ def test_run_iteration_cannot_exceed_maximum() -> None:
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
+
+
+@pytest.mark.parametrize("severity", list(FeedbackSeverity))
+def test_feedback_item_round_trips_every_severity(severity: FeedbackSeverity) -> None:
+    item = FeedbackItem.model_validate(
+        {
+            "severity": severity.value,
+            "issue": "The purchase flow has no failure path.",
+            "recommendation": "Add a terminal failure state.",
+        }
+    )
+
+    assert item.severity is severity
+
+
+def test_feedback_item_requires_issue_and_recommendation() -> None:
+    with pytest.raises(ValidationError):
+        FeedbackItem.model_validate({"severity": "must_fix", "issue": "Only an issue"})
+
+
+def test_feedback_item_rejects_unknown_severity() -> None:
+    with pytest.raises(ValidationError):
+        FeedbackItem.model_validate(
+            {
+                "severity": "blocker",
+                "issue": "A gap",
+                "recommendation": "Close it",
+            }
+        )
+
+
+def test_legacy_string_feedback_deserializes_as_advice_not_a_blocker() -> None:
+    """Runs persisted before severity existed must still load -- and must not
+    retroactively acquire blocking findings that would un-complete them."""
+    parsed = RoleReview.model_validate(
+        {
+            "role": "tech",
+            "score": 88,
+            "summary": "An older persisted review.",
+            "feedback": ["Add fraud detection.", "   "],
+        }
+    )
+
+    assert [item.severity for item in parsed.feedback] == [FeedbackSeverity.SHOULD_FIX]
+    assert parsed.feedback[0].issue == "Add fraud detection."
+    assert parsed.feedback[0].recommendation == "Add fraud detection."
+
+
+def test_severity_counts_and_must_fix_are_derived_from_combined_feedback() -> None:
+    evaluation = EvaluationResult(
+        tech=review(ReviewRole.TECH, 90),
+        ux=review(ReviewRole.UX, 90),
+        biz=review(ReviewRole.BIZ, 90),
+        overall_score=90.0,
+        combined_feedback=[
+            finding(FeedbackSeverity.MUST_FIX, "Blocking"),
+            finding(FeedbackSeverity.SHOULD_FIX, "Important"),
+            finding(FeedbackSeverity.OPTIONAL, "Polish"),
+            finding(FeedbackSeverity.OPTIONAL, "More polish"),
+        ],
+    )
+
+    assert evaluation.severity_counts() == {
+        "must_fix": 1,
+        "should_fix": 1,
+        "optional": 2,
+    }
+    assert evaluation.must_fix_count == 1
+
+
+def test_severity_counts_cover_every_tier_even_when_empty() -> None:
+    evaluation = EvaluationResult(
+        tech=review(ReviewRole.TECH, 90),
+        ux=review(ReviewRole.UX, 90),
+        biz=review(ReviewRole.BIZ, 90),
+        overall_score=90.0,
+    )
+
+    assert evaluation.severity_counts() == {
+        "must_fix": 0,
+        "should_fix": 0,
+        "optional": 0,
+    }
+    assert evaluation.must_fix_count == 0
+
+
+def test_review_filters_feedback_by_severity() -> None:
+    parsed = RoleReview(
+        role=ReviewRole.UX,
+        score=80,
+        summary="Mixed severities",
+        feedback=[
+            finding(FeedbackSeverity.MUST_FIX, "Dead end"),
+            finding(FeedbackSeverity.OPTIONAL, "Warmer copy"),
+        ],
+    )
+
+    assert [
+        item.issue for item in parsed.feedback_by_severity(FeedbackSeverity.MUST_FIX)
+    ] == ["Dead end"]
+    assert parsed.feedback_by_severity(FeedbackSeverity.SHOULD_FIX) == []

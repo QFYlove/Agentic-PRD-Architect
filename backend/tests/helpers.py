@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from backend.config import Settings
-from backend.event_store import EventStore
+from backend.event_store import EventStore, SQLiteEventStore
 from backend.providers.base import LLMProvider
 from backend.providers.mock import MockLLMProvider
 from backend.run_manager import RunManager
-from backend.run_store import InMemoryRunStore
+from backend.run_store import InMemoryRunStore, SQLiteRunStore
 from backend.workflow import AgentWorkflow
 
 
@@ -40,6 +40,36 @@ def make_manager(
     events = EventStore(
         buffer_size=resolved_settings.event_buffer_size,
         heartbeat_seconds=resolved_settings.sse_heartbeat_seconds,
+    )
+    manager = RunManager(
+        settings=resolved_settings,
+        provider=resolved_provider,
+        run_store=store,
+        event_store=events,
+    )
+    manager.set_workflow(AgentWorkflow(manager))
+    return manager
+
+
+def make_sqlite_manager(
+    *,
+    database_path: str,
+    provider: LLMProvider | None = None,
+    settings: Settings | None = None,
+) -> RunManager:
+    """A manager backed by the real SQLite stores, as `create_app` wires them."""
+    resolved_settings = settings or make_settings(database_path=database_path)
+    resolved_provider = provider or MockLLMProvider(delays_enabled=False)
+    store = SQLiteRunStore(
+        database_path=database_path,
+        max_runs=resolved_settings.max_retained_runs,
+        ttl_seconds=resolved_settings.run_ttl_seconds,
+    )
+    events = SQLiteEventStore(
+        database_path=database_path,
+        buffer_size=resolved_settings.event_buffer_size,
+        heartbeat_seconds=resolved_settings.sse_heartbeat_seconds,
+        initial_sequences=store.initial_sequences(),
     )
     manager = RunManager(
         settings=resolved_settings,

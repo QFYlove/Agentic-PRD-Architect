@@ -1,149 +1,65 @@
 # Agentic PRD Architect 实施进度
 
-> 最近更新：2026-07-26  
-> 当前阶段：P3 已完成，进入真实 Provider 手动发布检查
+> 最近更新：2026-08-21
+>
+> 当前状态：本地 Showcase 功能完整，全量自动化门禁通过；真实 Provider 冒烟仍为
+> 需要凭据的手动发布检查
 
-## 阶段状态
+## 已具备的能力
 
-| 阶段 | 状态 | 说明 |
+| 能力 | 状态 | 说明 |
 | --- | --- | --- |
-| P0 工程基础与数据契约 | 已完成 | 全部 13 步已实现并通过阶段门禁 |
-| P1 后端 Agent Loop 与实时协议 | 已完成 | 全部 30 步已实现并通过阶段门禁 |
-| P2 前端交互与可视化 | 已完成 | 全部 18 步已实现并通过自动化门禁 |
-| P3 真实模型、E2E 与交付加固 | 已完成 | 全部 12 步已实现并通过自动化交付门禁；真实模型冒烟因缺少授权或凭据未执行 |
-
-## P0 步骤记录
-
-| 步骤 | 状态 | 2026-07-26 验证结果 |
-| --- | --- | --- |
-| P0-01 运行时与包管理 | 完成 | Node 24.15.0、npm 11.12.1、Python 3.13.5；仅存在 `package-lock.json` |
-| P0-02 前端工程 | 完成 | Astro 4 + React 18 + Tailwind + Node SSR；首页 HTTP 200；生产构建成功 |
-| P0-03 前端质量工具 | 完成 | Prettier、ESLint、strict TypeScript、Vitest 和统一脚本均通过 |
-| P0-04 后端工程 | 完成 | 全新 `.venv` 安装锁定依赖；8 个直接运行依赖全部可导入 |
-| P0-05 后端质量工具 | 完成 | Ruff 格式/Lint、mypy strict、pytest 异步 Smoke Test 均通过 |
-| P0-06 配置模型 | 完成 | 默认值、环境覆盖、非法边界、真实 Provider 必填项、价格可用性和密钥隐藏测试通过 |
-| P0-07 请求与基础枚举 | 完成 | Run/Node 全枚举、文本长度、阈值、轮次和未知字段测试通过 |
-| P0-08 Reviewer 与聚合 | 完成 | 角色、0/100 边界、非法分数、空反馈、等权平均与一位小数测试通过 |
-| P0-09 修订/版本/遥测 | 完成 | 独立集合默认值、来源、优先级、版本和 Token 总数边界通过 |
-| P0-10 状态与迁移 | 完成 | 正常循环、暂停、取消、非法回退和终态不可迁移测试通过 |
-| P0-11 共享契约 | 完成 | 同一批 JSON 经 Pydantic 和前端解析器校验；覆盖 4 个终态和 17 个事件类型 |
-| P0-12 Memory Bank | 完成 | 本文件与 `architecture.md` 已建立维护基线 |
-| P0-13 阶段门禁 | 完成 | `npm ci`、前后端全量检查、生产构建和本地 HTTP 冒烟均通过 |
-
-## P1 步骤记录
-
-| 步骤 | 状态 | 2026-07-26 验证结果 |
-| --- | --- | --- |
-| P1-01 Provider 接口 | 完成 | 流式文本、结构化结果、格式修复和统一 Usage 接口已隔离具体 SDK |
-| P1-02 Mock Generator | 完成 | 任意输入及 1–5 轮输出稳定；固定分片、有/无延迟和版本差异测试通过 |
-| P1-03 三个 Mock Reviewer | 完成 | 独立角色 1–5 轮分数单调；Podcast v1=71.0、v2=88.0 |
-| P1-04 Mock Optimizer | 完成 | 反馈去重、多个来源保留、优先级和用户要求测试通过 |
-| P1-05 Prompt 模板 | 完成 | 五类职责、用户数据边界和禁止隐藏推理要求测试通过 |
-| P1-06 Token 与成本 | 完成 | 节点/任务累计、已知价格、未知价格 `null` 和 Mock 零成本通过 |
-| P1-07 RunStore | 完成 | 深拷贝读取、每 Run 锁、容量、并发提交和版本顺序通过 |
-| P1-08 容量与 TTL | 完成 | 仅终态过期；活动/暂停保留；生命周期启动、停止与单次清理已实现 |
-| P1-09 EventStore 追加 | 完成 | 50 路并发追加仍保持唯一、严格递增序号及有界缓冲 |
-| P1-10 事件回放 | 完成 | 完整/部分回放、过期 410 和恢复游标规则通过 |
-| P1-11 订阅与 Heartbeat | 完成 | 多订阅者唤醒；Heartbeat 无 ID、不入缓冲；终态排空关闭 |
-| P1-12 后台任务 | 完成 | UUID、唯一 Task、重复启动冲突和引用自动清理通过 |
-| P1-13 原子提交 | 完成 | 状态、业务事件和 `latest_event_sequence` 在同一 Run 锁内提交 |
-| P1-14 应用关闭 | 完成 | 清理任务、运行/暂停工作流及等待订阅均可在关闭时回收 |
-| P1-15 Generator 节点 | 完成 | LangGraph 节点、128 字符/50ms 合并、attempt/reset、完整校准通过 |
-| P1-16 并行 Reviewer | 完成 | 同步屏障证明三角色在任一完成前均已启动，结果字段互不覆盖 |
-| P1-17 聚合节点 | 完成 | 后端等权计算、角色齐全校验、合并反馈和分数事件通过 |
-| P1-18 质量门 | 完成 | 低于、等于、高于阈值边界测试通过，等于即完成 |
-| P1-19 最大轮次 | 完成 | 1、3、5 轮均不超限，使用独立 `MAX_ITERATIONS_REACHED` 终态 |
-| P1-20 优化循环 | 完成 | v1→修订计划→v2 顺序、版本号和计划吸收通过 |
-| P1-21 安全暂停 | 完成 | 生成/评审请求最终在聚合后暂停；暂停时间不计总超时 |
-| P1-22 恢复与补充要求 | 完成 | 仅 PAUSED 可恢复；用户要求进入下一版本修订计划且只消费一次 |
-| P1-23 取消与晚到隔离 | 完成 | 生成/评审取消后不写入晚到版本、评分、Token 或业务事件 |
-| P1-24 结构化重试 | 完成 | 传输最多两次、结构修复一次、二次非法和认证失败立即终止 |
-| P1-25 超时与并发 | 完成 | 节点/Run 超时有界；PAUSED 占槽且终态释放；超限返回 429 |
-| P1-26 创建/快照/健康 API | 完成 | 202 创建、原子快照、404 和无密钥健康响应通过 |
-| P1-27 控制 API | 完成 | Pause/Resume/Cancel 路由、冲突响应和幂等取消通过 |
-| P1-28 SSE API | 完成 | 标准 event/id/data、较大恢复游标、回放、过期和终态关闭通过 |
-| P1-29 错误与 CORS | 完成 | 统一错误信封；只允许两个配置的本地 Origin |
-| P1-30 阶段门禁 | 完成 | 完整 Mock 两轮 API/Graph/SSE 流程及所有检查通过，无跳过测试 |
-
-## P2 步骤记录
-
-| 步骤 | 状态 | 2026-07-26 验证结果 |
-| --- | --- | --- |
-| P2-01 Astro 页面壳 | 完成 | Layout、元数据、全局样式、React Island 和无脚本说明已实现；SSR 构建通过 |
-| P2-02 API Client | 完成 | 单一公开 Base URL、开发默认值、全部 REST 方法、统一错误和密钥扫描通过 |
-| P2-03 Run Reducer | 完成 | 快照、连接、状态、终态及重复/乱序/跨 Run 事件隔离测试通过 |
-| P2-04 PRD/Reviewer 归并 | 完成 | attempt/reset、旧增量隔离、完整校准、任意评审顺序和多版本测试通过 |
-| P2-05 快照恢复 | 完成 | `run_id` URL 恢复、创建写入、未知 Run 清理、New Run 和卸载测试通过 |
-| P2-06 EventSource 生命周期 | 完成 | 全事件监听、错误计数重置、三次错误快照校准、终态关闭测试通过 |
-| P2-07 产品表单 | 完成 | 三类文本边界、字符提示、提交状态、校验和重复提交隔离测试通过 |
-| P2-08 Dashboard 状态 | 完成 | 空、创建、运行、暂停请求、暂停、完成和失败状态组件测试通过 |
-| P2-09 Agent Trace | 完成 | 结构化安全摘要、顺序、角色、错误和敏感字段过滤测试通过 |
-| P2-10 运行控制 | 完成 | Pause/Resume/Cancel/New Run 合法矩阵、请求中禁用和旧事件隔离通过 |
-| P2-11 补充优化要求 | 完成 | PAUSED 专用输入、2,000 字符限制、空值和恢复请求测试通过 |
-| P2-12 PRD Viewer | 完成 | GFM、流式标识、版本 Tab、旧版固定选择和禁用原始 HTML 通过 |
-| P2-13 Markdown 下载 | 完成 | 原始 UTF-8 Markdown、确定性文件名、版本内容和 URL 回收测试通过 |
-| P2-14 评分雷达图 | 完成 | Recharts 三轴/三版本上限及始终可读的文本表格降级已实现 |
-| P2-15 Mermaid 工作流 | 完成 | 固定模板、五种节点状态、浏览器延迟加载、重复渲染和失败降级通过 |
-| P2-16 遥测面板 | 完成 | 轮次、耗时、输入/输出/总 Token、后端费用和 Mock 标识测试通过 |
-| P2-17 响应式/无障碍 | 完成 | 标签、ARIA live、键盘焦点、非颜色状态、基础自动检查及桌面/390px 截图通过 |
-| P2-18 阶段门禁 | 完成 | 48 项前端测试和全静态门禁通过；本地代理真实 Mock 流程完成两轮并以 88 分结束 |
-
-## P3 步骤记录
-
-| 步骤 | 状态 | 2026-07-26 验证结果 |
-| --- | --- | --- |
-| P3-01 Mock Happy Path E2E | 完成 | Playwright Chromium 自动完成 Podcast 两轮、71→88 分、三 Reviewer、雷达图和 Markdown 下载；连续 3 次通过 |
-| P3-02 暂停恢复 E2E | 完成 | Reviewer 期间安全暂停，恢复要求进入下一版；事件顺序和 Optimizer 启动边界通过 |
-| P3-03 取消 E2E | 完成 | 生成/评审阶段取消均稳定进入 CANCELLED；生成取消额外连续 5 次通过，晚到结果未写入 |
-| P3-04 断线恢复 E2E | 完成 | 三次 SSE 建连失败触发快照校准；评审期间断开页面后按 run_id 恢复，无版本或 sequence 重复 |
-| P3-05 失败路径 E2E | 完成 | 非法结构、Provider 超时、Reviewer 永久失败、最大轮次和第五个并发请求均得到确定终态 |
-| P3-06 DeepSeek/GLM 文本生成 | 完成 | 统一 OpenAI 兼容适配器覆盖流式分片、Usage、关闭、取消、超时和认证错误 |
-| P3-07 DeepSeek/GLM 结构化生成 | 完成 | JSON Object + Pydantic Schema 提示、校验和单次修复通过合法/非法/缺 Usage 契约测试 |
-| P3-08 真实模型冒烟 | 未执行 | 未执行：缺少授权或凭据；默认自动测试不访问真实网络 |
-| P3-09 日志与安全 | 完成 | 请求/Run/节点/重试结构化元数据日志通过；注入、HTML、脚本、伪系统指令和密钥泄漏测试通过 |
-| P3-10 性能与资源 | 完成 | 四 Run/第五个 429、有界事件、两轮 TTL 清理和 5,000 字符 PRD 完整性测试通过 |
-| P3-11 运行文档 | 完成 | README、PRD、设计、技术栈和实施计划已同步 DeepSeek/GLM、端口、单 Worker、测试与排障 |
-| P3-12 最终门禁 | 完成 | 后端 149、前端 48、Mock E2E 11 项全部通过；类型、Lint、格式、mypy、SSR 构建均通过 |
+| Agentic Loop | 完成 | Generator → Tech/UX/Biz 并行 Reviewer → 确定性 Aggregator → Optimizer → Generator |
+| 确定性总分 | 完成 | 总分只由后端等权计算，模型自报的总分一律不采用 |
+| 质量门 | 完成 | `overall_score >= quality_threshold` 且 `must_fix_count == 0` 两个条件同时成立才 `COMPLETED` |
+| 迭代预算终态 | 完成 | 预算用尽以 `MAX_ITERATIONS_REACHED` 收尾，属正常终态，终态面板同时给出未达成目标与最佳版本 |
+| 反馈 severity | 完成 | `must_fix` / `should_fix` / `optional`；计数按需从存储反馈推导，不作为总数持久化 |
+| Revision Plan | 完成 | Optimizer 输出结构化修订计划，下一轮 Generator 逐条处理 |
+| 多版本与最佳版本 | 完成 | 每版独立保存正文、评审、修订计划与 Token；`best_version` / `best_score` 跟踪最高分而非最新版 |
+| 版本对比 | 完成 | 「阅读对比」与「源码」两种视图 |
+| GFM 渲染 | 完成 | `remark-gfm` 表格，`skipHtml` 禁用原始 HTML |
+| Mermaid | 完成 | `flowchart`（含 `graph` 别名）/ `sequenceDiagram` / `stateDiagram-v2` / `mindmap` / `erDiagram` 白名单，首次用到才加载，`securityLevel: "strict"` + `htmlLabels: false`，解析失败降级为源码 |
+| 生成完整性保护 | 完成 | `finish_reason` 与 completion sentinel 两个独立信号；输出上限 / 提前结束 / 服务中断映射到三个错误码与三段文案 |
+| 失败保留 | 完成 | 后续版本生成失败时保留已提交的版本与其评审、修订计划，提示指名失败版本 |
+| 显式输出上限 | 完成 | `LLM_MAX_OUTPUT_TOKENS` 作为 `max_tokens` 发送，默认 16000 |
+| Per-node timing | 完成 | 节点、版本、attempt、墙钟秒数与 Token，含失败尝试 |
+| SSE 可靠性 | 完成 | 按 `Last-Event-ID` 补发，不重复不丢事件；落后过多的客户端由原子快照重校准 |
+| SQLite 持久化 | 完成 | 对话、快照与可回放事件写入 `data/agentic-prd.sqlite3`，重启后历史可浏览 |
+| Markdown 下载 | 完成 | 任意版本导出原始 UTF-8 Markdown，sentinel 已剥离 |
+| 任务控制 | 完成 | Pause / Resume（含补充优化要求）/ Cancel，取消为用户意图优先终态 |
+| 真实 Provider | 完成 | DeepSeek 与 GLM 共用 OpenAI 兼容适配器；配置在启动时校验，不静默回退 Mock |
+| Mock 模式 | 完成 | 确定性场景，无需外部凭据；Podcast v1=71.0、v2=88.0，v1 每位 Reviewer 各带一条 `must_fix` |
 
 ## 最新门禁结果
 
-- 前端：8 个 Vitest 文件、48 项测试全部通过。
-- 后端：149 项 pytest 测试全部通过，无 skip（使用
-  `-p no:cacheprovider` 避开当前工作区不可访问的旧 pytest 缓存）。
-- 静态检查：Prettier、ESLint、Astro TypeScript、Ruff 和 mypy 全部通过。
-- 构建：Astro Node SSR 生产构建成功；首屏 Dashboard、PRD Viewer、雷达图和
-  Mermaid 已拆分；生产产物密钥模式扫描为 clean。
-- 浏览器验收：Playwright Chromium 11 项 E2E 全部通过；Podcast Happy Path
-  连续 3 次通过，生成阶段取消额外连续 5 次通过。
-- 真实 Provider 冒烟：未执行：缺少授权或凭据。DeepSeek 与 GLM 的 SDK
-  替身契约、错误映射和结构化输出测试均已通过。
+- 后端：pytest 276 项通过，无 skip（使用 `-p no:cacheprovider`）。
+- 前端：Vitest 15 个文件、184 项测试通过。
+- 浏览器：Playwright Chromium 18 项 E2E 通过。
+- 静态检查：`astro check` 0 error / 0 warning / 0 hint，ESLint、Prettier、Ruff
+  format/check、mypy strict 全部通过。
+- 构建：Astro Node SSR 生产构建成功。
+- 真实 Provider 冒烟：未执行：缺少授权或凭据。DeepSeek 与 GLM 的 SDK 替身契约、
+  错误映射和结构化输出测试均已通过。
 
-## 已知事项
+## 已知限制
 
-- npm 当前报告 28 个全量上游依赖告警（8 moderate、19 high、1 critical）；
-  `npm audit --omit=dev` 报告生产树 12 个告警（9 moderate、3 high、0
-  critical）。主要来自被需求固定的 Astro 4/Vite 5 依赖链及 Mermaid 10。
-  当前版本仅适合设计文档规定的本地 Showcase，不应直接公开部署。未执行会造成
-  Major 版本变化且仍不能消除全部告警的 `npm audit fix --force`；后续公开部署
-  前必须先更新需求并验证 Astro/Mermaid Major 升级。
-- 当前后端必须保持单进程；进程内 Run/Event Store 不能跨 Worker 共享。
-- `.env` 默认启用 Mock，并选择 DeepSeek；GLM 配置整段保留为注释。关闭 Mock
-  前必须填写所选 Provider 的有效 API Key。
+- 后端必须以单 Uvicorn Worker 运行：Task 句柄、Run 锁、Pause/Resume/Cancel 信号和
+  SSE 订阅 Condition 都在进程内，不支持水平扩展。
+- 持久化只有本地 SQLite，不引入外部数据库、Redis 或队列。活动工作流不做
+  checkpoint：启动时发现的非终态 Run 标记为 `RUN_INTERRUPTED`，不自动续跑。
+- 终态任务不能继续优化，需要继续请新建任务。
+- 不支持手工编辑 PRD 正文；用户通过创意描述、质量设置和暂停时的补充要求施加影响。
+- 导出只支持 Markdown，没有 PDF / DOCX。
+- 真实 Provider 的分数、篇幅、耗时和费用是所配置模型服务的属性，不是本应用的属性；
+  只有 Mock 模式具有确定性。
+- 锁定的 Astro 4 / Vite 5 / Mermaid 10 依赖树存在已公开上游告警。当前版本只适合本地
+  Showcase，公网部署前必须先把这些 Major 升级作为显式变更完成并重跑全部门禁；不执行
+  `npm audit fix --force`，因为它会改变 Major 版本且仍不能消除全部告警。
+- `.env` 默认启用 Mock 并选择 DeepSeek，GLM 配置整段注释。关闭 Mock 前必须填写所选
+  Provider 的有效 API Key。
 
 ## 下一步
 
-获得明确授权、有效 API Key 和网络后，按 README 关闭 Mock，分别选择 DeepSeek
-或 GLM 执行一次手动真实模型发布冒烟；记录模型、Token、估算费用、安全日志和
-最终状态。未获得这些条件时无需重复默认自动化。
-
-## SQLite 对话持久化
-
-- 新增 `SQLiteRunStore`：快照、版本、评分、遥测和错误状态写入
-  `data/agentic-prd.sqlite3`。
-- 新增 `SQLiteEventStore`：业务事件持久化，重启后仍可按 sequence 回放。
-- 新增 `GET /api/runs` 对话摘要列表接口。
-- 前端新增左侧“对话记录”栏，支持新建和切换历史 Run；切换时更新 URL 并隔离
-  旧 SSE 会话。
-- 未完成 Run 在后端重启后标记为 `RUN_INTERRUPTED`，不自动续跑。
-- SQLite 文件、WAL 和共享内存文件已加入 `.gitignore`；E2E 使用
-  `DATABASE_PATH=:memory:` 保持测试隔离。
+获得明确授权、有效 API Key 和网络后，按 README 关闭 Mock，分别选择 DeepSeek 或 GLM
+执行一次手动真实模型发布冒烟；记录模型、Token、估算费用、安全日志和最终状态。未获得
+这些条件时无需重复默认自动化。

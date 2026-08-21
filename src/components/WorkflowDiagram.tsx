@@ -1,10 +1,8 @@
 import {
   CheckCircle2,
   CircleDashed,
-  GitFork,
   LoaderCircle,
   MinusCircle,
-  Workflow,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -12,21 +10,33 @@ import {
 import type { NodeStatus, RunStatus } from "../lib/types";
 import { isTerminalRunStatus } from "../lib/types";
 
-const STEPS = [
-  ["generator", "生成器", "草稿"],
-  ["tech_reviewer", "技术", "评审"],
-  ["ux_reviewer", "体验", "评审"],
-  ["biz_reviewer", "商业", "评审"],
-  ["aggregator", "汇总器", "综合分析"],
-  ["optimizer", "优化器", "修订"],
+/**
+ * The graph, as a list of stages.
+ *
+ * The previous version drew this with an absolutely positioned SVG canvas, a
+ * gradient overlay, a grid glow and a pulsing hub -- roughly 250 lines of CSS
+ * for a pipeline that never branches except at the three parallel reviewers.
+ * `group` marks the stages that run at the same time, which is the only
+ * structural fact the picture was carrying.
+ */
+const STAGES = [
+  { id: "generator", label: "生成器", caption: "草稿", group: 1 },
+  { id: "tech_reviewer", label: "技术", caption: "评审", group: 2 },
+  { id: "ux_reviewer", label: "体验", caption: "评审", group: 2 },
+  { id: "biz_reviewer", label: "商业", caption: "评审", group: 2 },
+  { id: "aggregator", label: "汇总器", caption: "综合分析", group: 3 },
+  { id: "optimizer", label: "优化器", caption: "修订", group: 4 },
 ] as const;
 
-const STATUS_META: Record<NodeStatus, { icon: LucideIcon; label: string }> = {
-  PENDING: { icon: CircleDashed, label: "等待中" },
-  RUNNING: { icon: LoaderCircle, label: "运行中" },
-  SUCCEEDED: { icon: CheckCircle2, label: "已完成" },
-  FAILED: { icon: XCircle, label: "失败" },
-  SKIPPED: { icon: MinusCircle, label: "已跳过" },
+const STATUS_META: Record<
+  NodeStatus,
+  { icon: LucideIcon; label: string; tone: string }
+> = {
+  PENDING: { icon: CircleDashed, label: "等待中", tone: "text-ink-faint" },
+  RUNNING: { icon: LoaderCircle, label: "运行中", tone: "text-accent" },
+  SUCCEEDED: { icon: CheckCircle2, label: "已完成", tone: "text-ok" },
+  FAILED: { icon: XCircle, label: "失败", tone: "text-danger" },
+  SKIPPED: { icon: MinusCircle, label: "已跳过", tone: "text-ink-faint" },
 };
 
 const RUN_LABELS: Record<RunStatus, string> = {
@@ -51,47 +61,50 @@ function statusFor(
   return statuses[id] ?? "PENDING";
 }
 
-function edgeIsActive(
-  statuses: Record<string, NodeStatus>,
-  ...nodeIds: string[]
-): boolean {
-  return nodeIds.some((id) => statusFor(statuses, id) !== "PENDING");
-}
-
 function WorkflowNode({
   id,
   label,
   caption,
   status,
-  className,
+  groupLabel,
 }: {
   id: string;
   label: string;
   caption: string;
   status: NodeStatus;
-  className: string;
+  /** Set on the first stage of a parallel group; renders above the row. */
+  groupLabel: string | null;
 }) {
   const meta = STATUS_META[status];
   const StatusIcon = meta.icon;
 
   return (
     <li
-      className={`workflow-node ${className}`}
+      className="list-none"
       data-node={id}
       data-status={status.toLowerCase()}
       aria-label={`${label}：${meta.label}`}
     >
-      <span className="workflow-node-icon" aria-hidden="true">
+      {groupLabel === null ? null : (
+        <p className="meta-label pb-1 pt-1.5">{groupLabel}</p>
+      )}
+      <span className="flex min-w-0 items-center gap-2.5 rounded-control border border-line bg-canvas px-3 py-2">
         <StatusIcon
+          aria-hidden="true"
           size={15}
-          className={status === "RUNNING" ? "animate-spin" : undefined}
+          className={`shrink-0 ${meta.tone} ${
+            status === "RUNNING" ? "animate-spin" : ""
+          }`}
         />
+        <span className="min-w-0">
+          <strong className="block truncate text-sm font-medium text-ink">
+            {label}
+          </strong>
+          <small className="block truncate text-[11px] text-ink-faint">
+            {caption}
+          </small>
+        </span>
       </span>
-      <span className="min-w-0">
-        <strong>{label}</strong>
-        <small>{caption}</small>
-      </span>
-      <span className="workflow-status-dot" aria-hidden="true" />
     </li>
   );
 }
@@ -109,163 +122,38 @@ export function WorkflowDiagram({
       : "SUCCEEDED"
     : "PENDING";
 
-  const pathStates = {
-    generated: edgeIsActive(
-      statuses,
-      "generator",
-      "tech_reviewer",
-      "ux_reviewer",
-      "biz_reviewer",
-    ),
-    reviewing: edgeIsActive(
-      statuses,
-      "tech_reviewer",
-      "ux_reviewer",
-      "biz_reviewer",
-    ),
-    aggregated: edgeIsActive(statuses, "aggregator", "optimizer"),
-    optimizing: edgeIsActive(statuses, "optimizer"),
-    completed: completeStatus !== "PENDING",
-  };
-
   return (
-    <section
-      className="panel workflow-panel"
-      aria-labelledby="workflow-heading"
-    >
-      <header className="workflow-header">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="workflow-header-icon">
-            <Workflow aria-hidden="true" size={17} />
-          </span>
-          <div>
-            <p className="workflow-eyebrow">智能体图谱</p>
-            <h2 id="workflow-heading">工作流</h2>
-          </div>
-        </div>
-        <span className="workflow-run-state" data-run-status={runStatus}>
-          <span aria-hidden="true" />
-          {RUN_LABELS[runStatus]}
-        </span>
+    <section className="panel" aria-labelledby="workflow-heading">
+      <header className="flex items-center justify-between gap-3">
+        <h2 id="workflow-heading" className="panel-heading">
+          工作流
+        </h2>
+        <span className="tag">{RUN_LABELS[runStatus]}</span>
       </header>
 
-      <div className="workflow-canvas" role="group" aria-label="智能体工作流图">
-        <div className="workflow-grid-glow" aria-hidden="true" />
-        <svg
-          className="workflow-connectors"
-          viewBox="0 0 600 510"
-          preserveAspectRatio="none"
-          aria-hidden="true"
-        >
-          <defs>
-            <linearGradient
-              id="workflow-line-active"
-              x1="0"
-              y1="0"
-              x2="1"
-              y2="1"
-            >
-              <stop offset="0" stopColor="#22d3ee" />
-              <stop offset="1" stopColor="#34d399" />
-            </linearGradient>
-            <marker
-              id="workflow-arrow"
-              markerWidth="8"
-              markerHeight="8"
-              refX="6"
-              refY="4"
-              orient="auto"
-            >
-              <path d="M0,0 L8,4 L0,8 Z" fill="currentColor" />
-            </marker>
-          </defs>
-
-          <path
-            className="workflow-path"
-            data-active={pathStates.generated}
-            d="M300 86 L300 118"
-          />
-          <path
-            className="workflow-path"
-            data-active={pathStates.reviewing}
-            d="M300 160 C300 174 98 166 98 180"
-          />
-          <path
-            className="workflow-path"
-            data-active={pathStates.reviewing}
-            d="M300 160 L300 180"
-          />
-          <path
-            className="workflow-path"
-            data-active={pathStates.reviewing}
-            d="M300 160 C300 174 502 166 502 180"
-          />
-          <path
-            className="workflow-path"
-            data-active={pathStates.aggregated}
-            d="M98 242 C98 270 300 256 300 285"
-          />
-          <path
-            className="workflow-path"
-            data-active={pathStates.aggregated}
-            d="M300 242 L300 285"
-          />
-          <path
-            className="workflow-path"
-            data-active={pathStates.aggregated}
-            d="M502 242 C502 270 300 256 300 285"
-          />
-          <path
-            className="workflow-path"
-            data-active={pathStates.optimizing}
-            d="M300 347 C300 378 150 370 150 400"
-          />
-          <path
-            className="workflow-path"
-            data-active={pathStates.completed}
-            d="M300 347 C300 378 450 370 450 400"
-          />
-          <path
-            className="workflow-path workflow-path-loop"
-            data-active={pathStates.optimizing}
-            d="M150 462 C42 462 42 56 210 56"
-            markerEnd="url(#workflow-arrow)"
-          />
-        </svg>
-
-        <div className="workflow-hub" aria-label="并行评审分支">
-          <GitFork aria-hidden="true" size={15} />
-          <span>并行评审</span>
-          <i aria-hidden="true" />
-        </div>
-
-        <span className="workflow-branch-label workflow-branch-label-left">
-          未达门槛
-        </span>
-        <span className="workflow-branch-label workflow-branch-label-right">
-          达到门槛
-        </span>
-
-        <ol className="workflow-node-layer" aria-label="智能体工作流步骤">
-          {STEPS.map(([id, label, caption]) => (
-            <WorkflowNode
-              key={id}
-              id={id}
-              label={label}
-              caption={caption}
-              status={statusFor(statuses, id)}
-              className={`workflow-node-${id.replaceAll("_", "-")}`}
-            />
-          ))}
+      <ol className="mt-4 space-y-1.5" aria-label="智能体工作流步骤">
+        {STAGES.map((stage, index) => (
           <WorkflowNode
-            id="complete"
-            label="完成"
-            caption="最终 PRD"
-            status={completeStatus}
-            className="workflow-node-complete"
+            key={stage.id}
+            id={stage.id}
+            label={stage.label}
+            caption={stage.caption}
+            status={statusFor(statuses, stage.id)}
+            groupLabel={
+              stage.group === 2 && STAGES[index - 1]?.group !== stage.group
+                ? "并行评审"
+                : null
+            }
           />
-        </ol>
-      </div>
+        ))}
+        <WorkflowNode
+          id="complete"
+          label="完成"
+          caption="最终 PRD"
+          status={completeStatus}
+          groupLabel={null}
+        />
+      </ol>
     </section>
   );
 }

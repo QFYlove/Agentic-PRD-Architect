@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from backend.language import DEFAULT_OUTPUT_LANGUAGE
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -52,6 +54,28 @@ class RevisionPriority(StrEnum):
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"
+
+
+class FeedbackSeverity(StrEnum):
+    """How much a single reviewer finding should be allowed to block a run.
+
+    A flat list of feedback strings makes "the payment flow has no failure path"
+    and "this metric could be quantified further" look identical, so a run that
+    reached its score target still reads as unfinished. Only ``MUST_FIX`` gates
+    completion; the other two tiers are advice that survives a finished PRD.
+    """
+
+    MUST_FIX = "must_fix"
+    SHOULD_FIX = "should_fix"
+    OPTIONAL = "optional"
+
+
+#: Highest first. Used to resolve one issue raised at two severities.
+SEVERITY_ORDER: tuple[FeedbackSeverity, ...] = (
+    FeedbackSeverity.MUST_FIX,
+    FeedbackSeverity.SHOULD_FIX,
+    FeedbackSeverity.OPTIONAL,
+)
 
 
 class RunEventType(StrEnum):
@@ -110,12 +134,55 @@ class ResumeRunRequest(StrictModel):
         return normalized or None
 
 
+class FeedbackItem(StrictModel):
+    """One reviewer finding, with the severity that decides whether it blocks."""
+
+    severity: FeedbackSeverity
+    issue: str = Field(min_length=1, max_length=2000)
+    recommendation: str = Field(min_length=1, max_length=2000)
+
+
+def _coerce_feedback(value: Any) -> Any:
+    """Accept the legacy ``list[str]`` shape that persisted snapshots still hold.
+
+    Runs recorded before severity existed stored bare strings. They deserialize
+    as ``should_fix`` -- never ``must_fix``, because promoting old advice to a
+    blocker would retroactively un-complete finished runs. Structured items are
+    left untouched so a malformed model response still fails loudly.
+    """
+    if not isinstance(value, list):
+        return value
+    coerced: list[Any] = []
+    for item in value:
+        if isinstance(item, str):
+            text = item.strip()
+            if not text:
+                continue
+            coerced.append(
+                {
+                    "severity": FeedbackSeverity.SHOULD_FIX.value,
+                    "issue": text,
+                    "recommendation": text,
+                }
+            )
+        else:
+            coerced.append(item)
+    return coerced
+
+
 class RoleReview(StrictModel):
     role: ReviewRole
     score: int = Field(ge=0, le=100)
     summary: str = Field(min_length=1, max_length=2000)
     strengths: list[str] = Field(default_factory=list)
-    feedback: list[str] = Field(default_factory=list)
+    feedback: list[FeedbackItem] = Field(default_factory=list)
+
+    _coerce_legacy_feedback = field_validator("feedback", mode="before")(
+        _coerce_feedback
+    )
+
+    def feedback_by_severity(self, severity: FeedbackSeverity) -> list[FeedbackItem]:
+        return [item for item in self.feedback if item.severity is severity]
 
 
 class EvaluationResult(StrictModel):
@@ -123,7 +190,11 @@ class EvaluationResult(StrictModel):
     ux: RoleReview
     biz: RoleReview
     overall_score: float = Field(ge=0, le=100)
-    combined_feedback: list[str] = Field(default_factory=list)
+    combined_feedback: list[FeedbackItem] = Field(default_factory=list)
+
+    _coerce_legacy_combined = field_validator("combined_feedback", mode="before")(
+        _coerce_feedback
+    )
 
     @model_validator(mode="after")
     def validate_roles_and_score(self) -> EvaluationResult:
@@ -144,6 +215,25 @@ class EvaluationResult(StrictModel):
                 f"overall_score must be the server-computed average: {expected_score}"
             )
         return self
+
+    def severity_counts(self) -> dict[str, int]:
+        """How many open findings sit at each tier, across all three reviewers.
+
+        Derived on demand rather than stored: the counts must never be able to
+        disagree with the reviews they summarise.
+        """
+        counts = {severity.value: 0 for severity in SEVERITY_ORDER}
+        for item in self.combined_feedback:
+            counts[item.severity.value] += 1
+        return counts
+
+    @property
+    def must_fix_count(self) -> int:
+        return sum(
+            1
+            for item in self.combined_feedback
+            if item.severity is FeedbackSeverity.MUST_FIX
+        )
 
 
 class RevisionItem(StrictModel):
@@ -190,6 +280,29 @@ class RunError(StrictModel):
     retryable: bool = False
 
 
+class NodeTiming(StrictModel):
+    """How long one node call took, and what it spent.
+
+    A 500-second run gives no clue which of six sequential-and-parallel model
+    calls owned the time. One record per completed call answers that without a
+    profiler: the node, which version it was working on, which attempt, and the
+    wall-clock seconds between the node starting (or its previous attempt ending)
+    and this call returning.
+
+    ``succeeded`` is false for an attempt that burned tokens and then produced an
+    unusable document -- those are exactly the calls a slow run needs to show, and
+    hiding them would make the recorded time not add up to the elapsed time.
+    """
+
+    node: str = Field(min_length=1, max_length=64)
+    version: int = Field(ge=1, le=5)
+    attempt: int = Field(default=1, ge=1)
+    seconds: float = Field(ge=0)
+    succeeded: bool = True
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+
+
 class PRDVersion(StrictModel):
     version: int = Field(ge=1, le=5)
     content: str
@@ -208,6 +321,12 @@ class PRDRunState(StrictModel):
     user_idea: str
     target_audience: str | None = None
     user_constraints: str | None = None
+    output_language: str = DEFAULT_OUTPUT_LANGUAGE
+    """The language every agent in this run must write in.
+
+    Derived once from the user's own text at creation time rather than per call,
+    so the PRD, all three reviews, and the revision plan cannot disagree.
+    """
     current_iteration: int = Field(default=1, ge=1, le=5)
     max_iterations: int = Field(default=3, ge=1, le=5)
     quality_threshold: float = Field(default=85.0, ge=50, le=100)
@@ -215,13 +334,42 @@ class PRDRunState(StrictModel):
     active_node: str | None = None
     versions: list[PRDVersion] = Field(default_factory=list)
     current_prd: str = ""
+    current_prd_attempt: int = Field(default=1, ge=1)
+    """Which generation attempt produced ``current_prd``.
+
+    ``prd_delta`` is transient, so a reconnecting client rebuilds its streaming
+    draft from ``current_prd``; without this field it cannot tell whether that
+    text belongs to attempt 1 or to a retry, and would discard every subsequent
+    delta of the attempt actually in flight.
+    """
     latest_evaluation: EvaluationResult | None = None
+    best_version: int | None = Field(default=None, ge=1, le=5)
+    """Which version scored highest so far, independent of which came last.
+
+    ``max_iterations`` is an attempt budget, not a guarantee of improvement: a
+    later version may legitimately score lower. Without this field the run's
+    outcome is read off the latest iteration, which presents a worse v3 as the
+    result of a run whose best work was v2.
+    """
+    best_score: float | None = Field(default=None, ge=0, le=100)
+    """The overall score of ``best_version``, recorded as the reviewers gave it.
+
+    Reviewer scores are never rewritten and never clamped to a running maximum;
+    only the pointer to the best one is kept.
+    """
     reviews: dict[ReviewRole, RoleReview] = Field(default_factory=dict)
     pending_revision_plan: RevisionPlan | None = None
     pending_user_override: str | None = None
     node_statuses: dict[str, NodeStatus] = Field(default_factory=dict)
     total_tokens: TokenUsage = Field(default_factory=TokenUsage)
     node_tokens: dict[str, TokenUsage] = Field(default_factory=dict)
+    node_timings: list[NodeTiming] = Field(default_factory=list)
+    """One entry per completed node call, in the order the calls returned.
+
+    A list rather than a per-node total: the same node runs once per iteration,
+    and "which node is slow" and "is it getting slower each round" are both
+    questions this answers only if the calls stay separate.
+    """
     estimated_cost_usd: float | None = Field(default=None, ge=0)
     cost_available: bool = False
     is_mock: bool = True
@@ -250,6 +398,8 @@ class RunSummary(StrictModel):
     current_iteration: int
     max_iterations: int
     latest_score: float | None = Field(default=None, ge=0, le=100)
+    best_version: int | None = Field(default=None, ge=1, le=5)
+    best_score: float | None = Field(default=None, ge=0, le=100)
     created_at: datetime
     updated_at: datetime
 

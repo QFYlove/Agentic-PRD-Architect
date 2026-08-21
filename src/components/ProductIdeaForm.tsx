@@ -67,26 +67,13 @@ export function ProductIdeaForm({
   const busy = isSubmitting || submittingLocally;
 
   return (
-    <form
-      className="rounded-[2rem] border border-white/10 bg-slate-950/75 p-6 shadow-2xl shadow-cyan-950/20 backdrop-blur-xl sm:p-8"
-      onSubmit={handleSubmit}
-      noValidate
-    >
-      <div className="flex items-start gap-3">
-        <span className="rounded-2xl bg-cyan-400/10 p-2.5 text-cyan-300">
-          <Sparkles aria-hidden="true" size={20} />
-        </span>
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cyan-300">
-            新建架构任务
-          </p>
-          <h2 className="mt-1 text-2xl font-semibold text-white">
-            把想法变成经过评审的 PRD
-          </h2>
-        </div>
+    <form className="panel" onSubmit={handleSubmit} noValidate>
+      <div className="panel-heading">
+        <Sparkles aria-hidden="true" size={16} />
+        <h2>把想法变成经过评审的 PRD</h2>
       </div>
 
-      <label className="mt-7 block text-sm font-medium text-slate-200">
+      <label className="mt-5 block text-sm font-medium text-ink">
         产品想法
         <textarea
           className="field mt-2 min-h-36 resize-y"
@@ -102,17 +89,17 @@ export function ProductIdeaForm({
       <div className="mt-2 flex justify-between gap-4 text-xs">
         <span
           id="idea-help"
-          className={errors.idea ? "text-rose-300" : "text-slate-500"}
+          className={errors.idea ? "text-danger" : "text-ink-faint"}
         >
           {errors.idea ?? "请尽量说明用户问题、使用场景和期望结果。"}
         </span>
-        <span id="idea-count" className="shrink-0 text-slate-500">
+        <span id="idea-count" className="shrink-0 text-ink-faint">
           {idea.length}/5000
         </span>
       </div>
 
       <div className="mt-5 grid gap-5 md:grid-cols-2">
-        <label className="block text-sm font-medium text-slate-200">
+        <label className="block text-sm font-medium text-ink">
           目标用户
           <input
             className="field mt-2"
@@ -122,11 +109,11 @@ export function ProductIdeaForm({
             aria-invalid={Boolean(errors.audience)}
             placeholder="例如：播客听众和独立创作者"
           />
-          <span className="mt-2 block text-xs text-slate-500">
+          <span className="mt-2 block text-xs text-ink-faint">
             {errors.audience ?? `${audience.length}/1000 · 选填`}
           </span>
         </label>
-        <label className="block text-sm font-medium text-slate-200">
+        <label className="block text-sm font-medium text-ink">
           约束条件
           <input
             className="field mt-2"
@@ -136,21 +123,21 @@ export function ProductIdeaForm({
             aria-invalid={Boolean(errors.constraints)}
             placeholder="例如：移动端优先、隐私要求、预算限制……"
           />
-          <span className="mt-2 block text-xs text-slate-500">
+          <span className="mt-2 block text-xs text-ink-faint">
             {errors.constraints ?? `${constraints.length}/2000 · 选填`}
           </span>
         </label>
       </div>
 
-      <details className="mt-6 rounded-2xl border border-white/8 bg-white/[0.025] p-4">
-        <summary className="cursor-pointer text-sm font-medium text-slate-300">
+      <details className="mt-5 border-t border-line pt-4">
+        <summary className="cursor-pointer text-sm font-medium text-ink-muted">
           质量设置
         </summary>
         <div className="mt-4 grid gap-5 sm:grid-cols-2">
-          <label className="text-sm text-slate-300">
+          <label className="text-sm text-ink-muted">
             质量门槛：{qualityThreshold}
             <input
-              className="mt-3 w-full accent-cyan-400"
+              className="mt-3 w-full accent-accent"
               type="range"
               min="50"
               max="100"
@@ -160,7 +147,7 @@ export function ProductIdeaForm({
               }
             />
           </label>
-          <label className="text-sm text-slate-300">
+          <label className="text-sm text-ink-muted">
             最大迭代次数
             <select
               className="field mt-2"
@@ -178,12 +165,12 @@ export function ProductIdeaForm({
       </details>
 
       <button
-        className="button-primary mt-6 w-full sm:w-auto"
+        className="button-primary mt-5 w-full sm:w-auto"
         type="submit"
         disabled={busy}
       >
         {busy ? "正在创建任务…" : "开始生成 PRD"}
-        {!busy && <ArrowRight aria-hidden="true" size={18} />}
+        {!busy && <ArrowRight aria-hidden="true" size={16} />}
       </button>
     </form>
   );

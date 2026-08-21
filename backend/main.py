@@ -129,6 +129,7 @@ def create_app(
                 base_url=base_url,
                 model=model,
                 request_timeout_seconds=app_settings.llm_request_timeout_seconds,
+                max_output_tokens=app_settings.llm_max_output_tokens,
                 extra_body=extra_body,
             )
     if app_settings.database_path == ":memory:":

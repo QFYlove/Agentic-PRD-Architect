@@ -41,6 +41,28 @@ describe("versioned API contracts", () => {
     expect(isTerminalRunStatus("GENERATING")).toBe(false);
   });
 
+  it("treats the streaming attempt as optional for older servers", () => {
+    expect(parseRunSnapshot(runSnapshot).current_prd_attempt).toBe(1);
+    const failed = terminalSnapshots.find(
+      (snapshot) => snapshot.status === "FAILED",
+    )!;
+    expect(parseRunSnapshot(failed).current_prd_attempt).toBe(2);
+    const cancelled = terminalSnapshots.find(
+      (snapshot) => snapshot.status === "CANCELLED",
+    )!;
+    expect(parseRunSnapshot(cancelled).current_prd_attempt).toBeUndefined();
+  });
+
+  it("treats the best-version pointer as optional for older servers", () => {
+    const capped = terminalSnapshots.find(
+      (snapshot) => snapshot.status === "MAX_ITERATIONS_REACHED",
+    )!;
+    const parsed = parseRunSnapshot(capped);
+    expect(parsed.best_version).toBe(2);
+    expect(parsed.best_score).toBe(81.7);
+    expect(parseRunSnapshot(runSnapshot).best_version).toBeUndefined();
+  });
+
   it("parses a fixture for every event type", () => {
     const parsedTypes = runEvents.map((event) => parseRunEvent(event).event);
     const expectedTypes = new Set<RunEventType>([

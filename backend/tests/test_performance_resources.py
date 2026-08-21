@@ -6,10 +6,17 @@ from time import monotonic
 from uuid import UUID
 
 from backend.main import create_app
+from backend.prd_document import strip_completion_marker
 from backend.providers.mock import MockLLMProvider
 from backend.schemas import CreateRunRequest, RunStatus, utc_now
 from backend.tests.helpers import make_manager, make_settings
 from backend.tests.test_api import client_for
+
+#: These tests exercise capacity, buffers, and streaming, not the quality gate.
+#: With ``max_iterations=1`` the mock's first round still carries one blocking
+#: finding per reviewer, so the gate correctly does not pass and the run ends by
+#: exhausting its budget. That is the terminal status to assert here.
+CAPPED = RunStatus.MAX_ITERATIONS_REACHED
 
 
 async def test_four_runs_complete_and_fifth_is_rejected_within_one_second() -> None:
@@ -50,7 +57,7 @@ async def test_four_runs_complete_and_fifth_is_rejected_within_one_second() -> N
     assert rejected.status_code == 429
     assert rejected.json()["error"]["code"] == "RUN_CAPACITY_REACHED"
     assert rejection_seconds < 1
-    assert all(result.status is RunStatus.COMPLETED for result in results)
+    assert all(result.status is CAPPED for result in results)
     assert len({result.run_id for result in results}) == 4
 
 
@@ -66,7 +73,7 @@ async def test_event_buffer_is_bounded_and_two_cleanup_cycles_remove_all_refs() 
         )
     )
     result = await manager.wait_for_completion(created.run_id, wait_seconds=5)
-    assert result.status is RunStatus.COMPLETED
+    assert result.status is CAPPED
     assert manager.event_store.buffer_length(created.run_id) <= 10
     assert created.run_id not in manager.tasks
 
@@ -94,7 +101,9 @@ async def test_long_prd_stream_is_exact_and_not_duplicated() -> None:
         settings=make_settings(event_buffer_size=100),
     )
     idea = "L" * 5000
-    expected = provider._prd(idea, None, None, 1, None)
+    # The provider emits the completion marker; the workflow strips it before the
+    # document is committed, so the stored version is the streamed text minus it.
+    expected = strip_completion_marker(provider._prd(idea, None, None, 1, None)).strip()
     created = await manager.create_run(
         CreateRunRequest(
             user_idea=idea,
@@ -105,7 +114,7 @@ async def test_long_prd_stream_is_exact_and_not_duplicated() -> None:
 
     result = await manager.wait_for_completion(created.run_id, wait_seconds=5)
 
-    assert result.status is RunStatus.COMPLETED
+    assert result.status is CAPPED
     assert result.versions[0].content == expected
     assert result.current_prd == expected
     assert manager.event_store.buffer_length(created.run_id) <= 100

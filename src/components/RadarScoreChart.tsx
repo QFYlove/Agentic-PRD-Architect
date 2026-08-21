@@ -12,7 +12,18 @@ import {
 
 import type { VersionScore } from "../lib/runReducer";
 
-const COLORS = ["#22d3ee", "#a78bfa", "#34d399"];
+/**
+ * Three versions, three lines, one hue family.
+ *
+ * The previous palette was cyan / violet / green -- three unrelated accents that
+ * made the chart the loudest thing on the page. These are the accent plus two
+ * neutrals, so the newest version reads as the subject and the older ones as
+ * context.
+ */
+const COLORS = ["#66717f", "#929caa", "#2cb7c9"];
+const GRID = "#28313c";
+const AXIS_TEXT = "#929caa";
+const AXIS_TICK = "#66717f";
 
 export function RadarScoreChart({
   scores,
@@ -59,33 +70,39 @@ export function RadarScoreChart({
           >
             <ResponsiveContainer width="100%" height="100%">
               <RadarChart data={data} outerRadius="68%">
-                <PolarGrid stroke="#334155" />
+                <PolarGrid stroke={GRID} />
                 <PolarAngleAxis
                   dataKey="dimension"
-                  tick={{ fill: "#94a3b8", fontSize: 11 }}
+                  tick={{ fill: AXIS_TEXT, fontSize: 11 }}
                 />
                 <PolarRadiusAxis
                   angle={90}
                   domain={[0, 100]}
-                  tick={{ fill: "#64748b", fontSize: 9 }}
+                  tick={{ fill: AXIS_TICK, fontSize: 9 }}
                   tickCount={5}
                 />
-                {versions.map((score, index) => (
-                  <Radar
-                    key={score.version}
-                    name={`v${score.version}`}
-                    dataKey={`v${score.version}`}
-                    stroke={COLORS[index]}
-                    fill={COLORS[index]}
-                    fillOpacity={0.08}
-                    strokeWidth={2}
-                  />
-                ))}
+                {versions.map((score, index) => {
+                  // Counted from the end, so the newest version always takes
+                  // the accent whether the run has one version or three.
+                  const colour =
+                    COLORS[COLORS.length - versions.length + index];
+                  return (
+                    <Radar
+                      key={score.version}
+                      name={`v${score.version}`}
+                      dataKey={`v${score.version}`}
+                      stroke={colour}
+                      fill={colour}
+                      fillOpacity={0.08}
+                      strokeWidth={2}
+                    />
+                  );
+                })}
                 <Tooltip
                   contentStyle={{
-                    background: "#0f172a",
-                    border: "1px solid #334155",
-                    borderRadius: 12,
+                    background: "#11161d",
+                    border: `1px solid ${GRID}`,
+                    borderRadius: 6,
                   }}
                 />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -95,7 +112,7 @@ export function RadarScoreChart({
           <div className="mt-2 overflow-x-auto">
             <table className="w-full text-left text-xs">
               <caption className="sr-only">PRD 质量评分的文本表格</caption>
-              <thead className="text-slate-500">
+              <thead className="text-ink-faint">
                 <tr>
                   <th className="py-2 font-medium">版本</th>
                   <th className="py-2 font-medium">技术</th>
@@ -109,9 +126,9 @@ export function RadarScoreChart({
                   <tr
                     key={score.version}
                     data-testid={`score-v${score.version}`}
-                    className="border-t border-white/8 text-slate-300"
+                    className="border-t border-line text-ink-muted"
                   >
-                    <th className="py-2 font-semibold text-white">
+                    <th className="py-2 font-semibold text-ink">
                       v{score.version}
                     </th>
                     <td>{score.tech}</td>

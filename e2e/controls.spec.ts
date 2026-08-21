@@ -70,13 +70,57 @@ for (const stage of ["generation", "review"] as const) {
     await expect(page.getByRole("button", { name: "新建任务" })).toBeEnabled();
 
     const snapshot = await getSnapshot(request, runId);
-    const expectedVersions = stage === "generation" ? 0 : 1;
-    expect(snapshot.versions).toHaveLength(expectedVersions);
     expect(snapshot.status).toBe("CANCELLED");
+
+    // `finish_generation` appends version 1 atomically, so a cancel issued
+    // during generation legitimately lands on either side of that commit: 0
+    // versions if it won the race, 1 if generation had already finished.
+    // Asserting a fixed 0 here is what made this case ~5% flaky. Reaching
+    // 评审中 means the commit is already durable, so there 1 is exact.
+    expect(stage === "generation" ? [0, 1] : [1]).toContain(
+      snapshot.versions.length,
+    );
+
+    // Whatever survived the race must be a whole generation result: the
+    // complete document, mirrored into `current_prd`, carrying none of the
+    // review output that a late reviewer would have written into it.
+    for (const version of snapshot.versions) {
+      expect(version.version).toBe(1);
+      expect(version.content).toBe(snapshot.current_prd);
+      expect(version.content).toContain(
+        "# Product Requirements Document — Version 1",
+      );
+      expect(version.content).toContain("## Acceptance Criteria");
+      expect(version.revision_plan).toBeNull();
+    }
+    if (stage === "generation") {
+      // No reviewer can have run: they all check the cancel signal on entry,
+      // and it is set before `run_cancelled` reaches the browser.
+      expect(snapshot.versions[0]?.evaluation ?? null).toBeNull();
+    }
+
+    const events = await getEvents(request, runId);
+    const names = events.map((event) => event.event);
+    expect(names).toContain("run_cancelled");
+    expect(names).not.toContain("run_completed");
+    expect(names).not.toContain("max_iterations_reached");
+    // Cancellation is a hard stop for business results. Telemetry may still
+    // flush the tokens already spent, so the invariant is about what the run
+    // produces, not about `run_cancelled` being the very last frame.
+    const afterCancel = names.slice(names.indexOf("run_cancelled") + 1);
+    expect(afterCancel).not.toContain("prd_delta");
+    expect(afterCancel).not.toContain("prd_generated");
+    expect(afterCancel).not.toContain("review_completed");
+    expect(afterCancel).not.toContain("scores_updated");
+    expect(afterCancel).not.toContain("revision_planned");
+
+    // Pin the observed result, then prove nothing further accretes onto it.
     const sequence = snapshot.latest_event_sequence;
+    const contents = snapshot.versions.map((version) => version.content);
     await page.waitForTimeout(300);
     const stable = await getSnapshot(request, runId);
-    expect(stable.versions).toHaveLength(expectedVersions);
+    expect(stable.status).toBe("CANCELLED");
+    expect(stable.versions.map((version) => version.content)).toEqual(contents);
     expect(stable.latest_event_sequence).toBe(sequence);
   });
 }

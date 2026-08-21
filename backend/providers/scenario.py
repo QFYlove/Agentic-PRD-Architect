@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Literal
 
 from backend.errors import ProviderAuthenticationError
+from backend.language import DEFAULT_OUTPUT_LANGUAGE
 from backend.providers.base import ProviderStructuredResult, ProviderTextEvent
 from backend.providers.mock import MockLLMProvider
 from backend.schemas import ReviewRole, RevisionPlan, TokenUsage
@@ -68,6 +69,8 @@ class ScenarioMockLLMProvider(MockLLMProvider):
         user_constraints: str | None,
         iteration: int,
         revision_plan: RevisionPlan | None,
+        baseline_prd: str | None = None,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> AsyncIterator[ProviderTextEvent]:
         if self.controller.scenario == "provider_timeout":
             await asyncio.sleep(self.timeout_delay)
@@ -77,6 +80,8 @@ class ScenarioMockLLMProvider(MockLLMProvider):
             user_constraints=user_constraints,
             iteration=iteration,
             revision_plan=revision_plan,
+            baseline_prd=baseline_prd,
+            output_language=output_language,
         ):
             yield event
 
@@ -86,6 +91,7 @@ class ScenarioMockLLMProvider(MockLLMProvider):
         role: ReviewRole,
         prd: str,
         iteration: int,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult:
         if self.delays_enabled and self.reviewer_stagger > 0:
             multiplier = {
@@ -111,6 +117,7 @@ class ScenarioMockLLMProvider(MockLLMProvider):
             role=role,
             prd=prd,
             iteration=iteration,
+            output_language=output_language,
         )
 
     async def repair_structured(
@@ -120,6 +127,7 @@ class ScenarioMockLLMProvider(MockLLMProvider):
         raw_value: Any,
         validation_error: str,
         role: ReviewRole | None = None,
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult:
         if self.controller.scenario == "malformed_structured":
             return ProviderStructuredResult(
@@ -132,4 +140,5 @@ class ScenarioMockLLMProvider(MockLLMProvider):
             raw_value=raw_value,
             validation_error=validation_error,
             role=role,
+            output_language=output_language,
         )
