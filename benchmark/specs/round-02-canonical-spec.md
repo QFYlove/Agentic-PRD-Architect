@@ -1,7 +1,7 @@
 # Round 2 Canonical Specification — Run-level Provider / Model Selection
 
-Status: **Frozen candidate for Round 2**  
-Benchmark baseline: `ai-coding-benchmark-v1` / `0edc069`  
+Status: **Frozen for Round 2**
+Benchmark baseline: `ai-coding-benchmark-v1` / `0edc069`
 Task type: implementation + testing
 
 ## 1. Purpose
@@ -24,7 +24,7 @@ The implementation MUST:
 - preserve existing REST control, SSE streaming, Pause, Resume, and Cancel behavior;
 - preserve SQLite as the source of truth;
 - preserve deterministic Mock and Scenario Mock behavior;
-- keep all credentials and private provider configuration on the backend.
+- keep all credentials and private Provider configuration on the backend.
 
 The following core behavior MUST NOT be redesigned as part of this task:
 
@@ -32,12 +32,18 @@ The following core behavior MUST NOT be redesigned as part of this task:
 - parallel Reviewer execution;
 - deterministic Aggregator behavior;
 - quality-gate behavior;
-- existing Run lifecycle semantics unrelated to provider/model selection.
+- existing Run lifecycle semantics unrelated to Provider/Model selection.
+
+Existing contract constraints that MUST remain stable unless strictly required by this feature:
+
+- the existing `HealthResponse` field shape and semantics;
+- the existing `RunEventType` set — do not add a new event type solely for Provider/Model selection.
 
 ## 3. Canonical terminology
 
 ### Provider
-A backend-configured model provider. It has:
+
+A backend-configured model Provider. It has:
 
 - a stable `provider_id` used by APIs and persistence;
 - a safe `provider_display_name` shown to users;
@@ -45,16 +51,18 @@ A backend-configured model provider. It has:
 - one or more allowed Models.
 
 ### Model
+
 A selectable model under a Provider. It has:
 
 - a stable `model_id` used by APIs and persistence;
 - a safe `model_display_name` shown to users;
 - optional safe capability metadata;
-- optional model-specific pricing metadata.
+- optional backend-only model-specific pricing metadata.
 
 `model_id` only needs to be unique within its Provider. The canonical identity of a selection is the pair `provider_id + model_id`.
 
 ### Run selection
+
 The immutable Provider/Model pair resolved when a new Run is created.
 
 ## 4. Backend-controlled safe catalog
@@ -77,8 +85,7 @@ The response MUST be structurally equivalent to:
         {
           "model_id": "model-a1",
           "model_display_name": "Model A1",
-          "capabilities": null,
-          "pricing": null
+          "capabilities": null
         }
       ]
     }
@@ -91,9 +98,9 @@ Requirements:
 - The catalog MUST be generated from backend-controlled configuration/registry data, not from frontend constants.
 - Only entries that are valid selectable choices for a new Run may appear.
 - The frontend MUST NOT be able to add or override a Provider, Model, credential, Base URL, header, or other private execution setting.
-- The response MUST NOT contain API keys, tokens, secrets, private Base URLs, auth headers, raw environment values, or arbitrary backend configuration passthrough.
+- The response MUST NOT contain API keys, tokens, secrets, private Base URLs, auth headers, raw environment values, arbitrary backend configuration passthrough, or actual model pricing values.
 - `capabilities` may be `null` or contain only safe public metadata.
-- `pricing` may be `null` or contain only safe model-specific pricing metadata.
+- Model pricing configuration remains backend-only. The frontend may display the Run's computed Telemetry cost, but it must not receive the configured per-token/per-million model price table through this catalog.
 - A valid but empty catalog returns an empty `providers` array.
 - A catalog configuration/loading failure MUST be surfaced as an error rather than converted into a fabricated/default catalog.
 
@@ -146,7 +153,7 @@ Existing response fields and meanings MUST remain compatible. New safe Provider/
 
 ## 6. Run-scoped binding and concurrency isolation
 
-Provider/Model execution configuration MUST be bound to the Run, not to mutable global "current provider/current model" state.
+Provider/Model execution configuration MUST be bound to the Run, not to mutable global "current Provider/current Model" state.
 
 For a newly created Run:
 
@@ -185,7 +192,7 @@ If an old pre-Round-2 Run with no persisted selection must perform additional mo
 
 ## 8. Rehydration and unavailable historical selections
 
-When a persisted new-format Run contains a Provider/Model selection, any execution path that needs to reconstruct provider access MUST use the persisted IDs.
+When a persisted new-format Run contains a Provider/Model selection, any execution path that needs to reconstruct Provider access MUST use the persisted IDs.
 
 If the persisted explicit selection is no longer available in backend configuration:
 
@@ -195,7 +202,7 @@ If the persisted explicit selection is no longer available in backend configurat
 
 The system MUST distinguish "historical metadata is readable" from "the historical Provider/Model is currently executable".
 
-## 9. Telemetry and Run information
+## 9. Telemetry, Run information, and contract preservation
 
 Safe Run/Telemetry information MUST make the Run's selected model inspectable.
 
@@ -221,6 +228,12 @@ Telemetry, Run APIs, SSE payloads, logs returned to the frontend, and error payl
 
 This task does not require adding Provider/Model metadata to every individual SSE event if existing Run-level Telemetry already provides a stable place to expose it.
 
+Contract preservation rules:
+
+- Keep the existing `HealthResponse` shape and semantics unchanged.
+- Do not add a new `RunEventType` solely to represent Provider/Model selection.
+- Prefer persisted Run/Telemetry metadata for exposing the selected Provider/Model.
+
 ## 10. Per-model pricing semantics
 
 Any pricing/cost logic affected by this feature MUST be model-scoped.
@@ -228,13 +241,14 @@ Any pricing/cost logic affected by this feature MUST be model-scoped.
 Requirements:
 
 - pricing belongs to a specific Model, not merely to a Provider or one global default;
+- pricing configuration remains backend-only;
 - if a cost estimate is computed, it MUST use the selected Run's Model pricing;
-- pricing from a different model MUST never be used as fallback;
+- pricing from a different Model MUST never be used as fallback;
 - if pricing for the selected Model is not configured/known, the resulting cost/price value MUST be `null`/unknown, not `0`, and not a guessed value;
 - an explicitly configured zero price remains distinct from missing pricing;
 - missing pricing MUST NOT prevent the Run itself from executing unless the baseline already requires pricing for execution.
 
-Do not invent a new pricing unit/currency schema if the baseline already has one. Preserve existing pricing units and public contract where possible while changing lookup semantics to be per-model.
+Do not invent a new pricing unit/currency schema if the baseline already has one. Preserve existing pricing units and public Telemetry contract where possible while changing lookup semantics to be per-model.
 
 ## 11. Frontend behavior
 
@@ -244,7 +258,7 @@ Required behavior:
 
 1. Load the catalog when the Create Run flow needs it.
 2. Show a Provider selector using safe display names.
-3. Show a Model selector containing only models belonging to the selected Provider.
+3. Show a Model selector containing only Models belonging to the selected Provider.
 4. Do not enable new Run creation until a valid Provider/Model pair is selected.
 5. Submit both `provider_id` and `model_id` in the new UI flow.
 6. When Provider changes, clear/reset a Model selection that is not valid for the newly selected Provider.
@@ -255,7 +269,7 @@ Required behavior:
 
 - **Loading:** selectors/Create action are not usable yet.
 - **Empty:** explain that no Provider/Model is available and disable Create.
-- **Error:** explain that the catalog could not be loaded and disable Create.
+- **Error:** explain that the catalog could not be loaded and disable Create; allow retry.
 - **Loaded:** enable Create only after a valid pair exists.
 
 The frontend MUST NOT contain Provider credentials, private Base URLs, or a parallel hard-coded authoritative catalog.
@@ -296,14 +310,14 @@ The only compatibility resolution allowed is the legacy behavior described in Se
 
 ## 14. Required test coverage
 
-Round 2 is incomplete without tests.
+Round 2 is incomplete without tests. These are implementation requirements for the coding systems; the benchmark operator does not need to build a separate large hidden-test suite before starting Round 2.
 
 ### 14.1 Backend pytest
 
 At minimum cover:
 
 - safe catalog success response;
-- catalog never serializes credentials/private Base URLs;
+- catalog never serializes credentials/private Base URLs or actual model pricing configuration;
 - valid explicit selection creates a Run;
 - selection persists IDs + display names;
 - unknown Provider fails with no Run created;
@@ -319,7 +333,8 @@ At minimum cover:
 - per-model pricing is selected correctly;
 - missing selected-model pricing yields `null`/unknown rather than `0`/fallback;
 - Mock/Scenario Mock determinism remains intact;
-- existing Pause/Resume/Cancel behavior remains intact for selected Runs.
+- existing Pause/Resume/Cancel behavior remains intact for selected Runs;
+- existing `HealthResponse` contract remains unchanged.
 
 ### 14.2 Contract tests
 
@@ -330,7 +345,8 @@ At minimum cover:
 - explicit `provider_id + model_id` request fields;
 - nullable Provider/Model metadata for old Runs;
 - non-null persisted metadata for new Runs;
-- existing SSE/REST contracts do not regress.
+- existing SSE/REST contracts do not regress;
+- no new `RunEventType` is required solely for this feature.
 
 ### 14.3 Vitest
 
@@ -338,7 +354,7 @@ At minimum cover:
 
 - catalog loading state;
 - empty state;
-- error state;
+- error state and retry behavior;
 - Provider selection filters Models;
 - Provider change invalidates an incompatible Model selection;
 - Create disabled without a complete valid pair;
@@ -368,7 +384,7 @@ The implementation is functionally complete only if all of the following are tru
 
 - [ ] New UI-created Runs always submit an explicit `provider_id + model_id` pair.
 - [ ] Backend catalog is authoritative and safe.
-- [ ] No credential/private Base URL reaches the frontend.
+- [ ] No credential/private Base URL or actual model pricing configuration reaches the frontend catalog.
 - [ ] Invalid or unavailable explicit selections fail with no fallback and no partial Run.
 - [ ] Selection is bound per Run and isolated across concurrent Runs.
 - [ ] New Run snapshots persist IDs + display names.
@@ -378,6 +394,7 @@ The implementation is functionally complete only if all of the following are tru
 - [ ] Per-model pricing semantics are correct; missing price is `null`/unknown.
 - [ ] Mock and Scenario Mock remain deterministic.
 - [ ] Core Agent loop and lifecycle behavior remain unchanged.
+- [ ] Existing `HealthResponse` and `RunEventType` contracts remain stable.
 - [ ] Catalog loading/empty/error states prevent new UI Run creation.
 - [ ] Backend pytest, contract, Vitest, Playwright, and static/type/build coverage is added or updated and relevant suites pass.
 
@@ -387,11 +404,13 @@ Round 2 does NOT require:
 
 - editing Provider credentials from the frontend;
 - user-supplied arbitrary Base URLs or API keys;
+- exposing backend model price tables in the catalog;
 - changing the Provider/Model of an already-created Run;
 - adding a database column or SQL DDL migration;
 - redesigning the Agent pipeline;
 - redesigning REST/SSE transport;
 - redesigning Pause/Resume/Cancel;
+- adding a new `RunEventType` solely for Provider/Model selection;
 - broad Provider abstraction refactors unrelated to Run-scoped binding;
 - adding new external Providers beyond what is needed to represent the backend-controlled configured catalog;
 - making live paid-provider calls in E2E tests.
