@@ -1,0 +1,97 @@
+round:
+  id: 1
+  name: repository-understanding-and-planning
+  date: 2026-09-09
+  task: Run-level Provider / Model Selection
+  phase: planning
+
+baseline:
+  tag: ai-coding-benchmark-v1
+  commit: 0edc069
+
+prompt:
+  file: ../../prompts/round-01-planning.md
+  sha256: 73db9b877cca5ac39bd338ea4672398470b68b042f0133904f4fd57e4e832149
+
+runs:
+  - id: cursor-grok46-medium
+    raw_file: cursor-grok4.6.md
+    product: Cursor
+    harness_version: unknown
+    model: Grok 4.6 Medium
+    provider: Cursor
+    reasoning: Medium
+    branch: bench/provider-cursor
+    duration_sec: 152
+    context_used_k: null
+    context_limit_k: null
+    input_tokens: null
+    output_tokens: null
+    cost_cny: null
+    manual_interventions: 0
+
+  - id: codex-gpt56-sol
+    raw_file: codex-gpt5.6sol.md
+    product: Codex
+    harness_version: 0.153.4
+    model: GPT-5.6 Sol
+    provider: internal-openai-compatible-gateway
+    reasoning: unknown
+    branch: bench/provider-codex
+    duration_sec: 370
+    context_used_k: null
+    context_limit_k: null
+    input_tokens: null
+    output_tokens: null
+    cost_cny: null
+    manual_interventions: 0
+
+  - id: claude-opus5
+    raw_file: claude-opus5.md
+    product: Claude Code
+    harness_version: 2.1.251.1
+    model: Opus 5
+    provider: internal
+    reasoning: unknown
+    branch: bench/provider-claude
+    duration_sec: 753
+    context_used_k: 77.9
+    context_limit_k: 200
+    input_tokens: null
+    output_tokens: null
+    cost_cny: null
+    manual_interventions: 0
+
+  - id: kimi-k26
+    raw_file: kimi-k26.md
+    product: Kimi Code
+    harness_version: 0.41.0
+    model: Kimi K2.6
+    provider: internal-openai-compatible-gateway
+    reasoning: unknown
+    branch: bench/provider-kimi
+    duration_sec: null
+    context_used_k: 126
+    context_limit_k: 256
+    input_tokens: null
+    output_tokens: null
+    cost_cny: null
+    manual_interventions: 0
+
+  - id: kimi-k3
+    raw_file: kimi-k3.md
+    product: Kimi Code
+    harness_version: 0.41.0
+    model: Kimi K3
+    provider: kimi-open-platform
+    reasoning: max-default
+    branch: bench/provider-kimi-k3
+    duration_sec: null
+    context_used_k: null
+    context_limit_k: null
+    input_tokens: null
+    output_tokens: null
+    cost_cny: 6.50
+    manual_interventions: 0
+    completion_status: completed
+    notes: "Duration and token usage were not exposed/recorded."

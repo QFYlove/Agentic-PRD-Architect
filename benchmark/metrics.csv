@@ -1,0 +1,6 @@
+round,phase,system_id,product,harness_version,model,provider,reasoning,duration_sec,context_used_k,context_limit_k,input_tokens,output_tokens,cost_cny,manual_interventions,files_changed,lines_added,lines_deleted,first_test_result,repair_rounds,final_test_result,completion_status,notes
+1,planning,cursor-grok46-medium,Cursor,unknown,Grok 4.6 Medium,Cursor,Medium,152,,,,,,0,0,0,0,N/A,0,N/A,completed,
+1,planning,codex-gpt56-sol,Codex,0.153.4,GPT-5.6 Sol,internal-openai-compatible-gateway,unknown,370,,,,,,0,0,0,0,N/A,0,N/A,completed,
+1,planning,claude-opus5,Claude Code,2.1.251.1,Opus 5,internal,unknown,753,77.9,200,,,,0,0,0,0,N/A,0,N/A,completed,
+1,planning,kimi-k26,Kimi Code,0.41.0,Kimi K2.6,internal-openai-compatible-gateway,unknown,,126,256,,,,0,0,0,0,N/A,0,N/A,completed,
+1,planning,kimi-k3,Kimi Code,0.41.0,Kimi K3,kimi-open-platform,max-default,,,,,,6.50,0,0,0,0,N/A,0,N/A,completed,"Duration/context/token usage unavailable"
