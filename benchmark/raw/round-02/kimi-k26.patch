@@ -1,0 +1,2454 @@
+diff --git a/backend/catalog.py b/backend/catalog.py
+new file mode 100644
+index 0000000..63b1dd8
+--- /dev/null
++++ b/backend/catalog.py
+@@ -0,0 +1,259 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from decimal import Decimal
++from typing import Any
++
++from pydantic import BaseModel, ConfigDict
++
++from backend.config import Settings
++from backend.providers.base import LLMProvider
++from backend.providers.compatible import OpenAICompatibleLLMProvider
++from backend.providers.mock import MockLLMProvider
++from backend.providers.scenario import ScenarioController, ScenarioMockLLMProvider
++
++
++class ModelInfo(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    model_id: str
++    model_display_name: str
++    capabilities: dict[str, Any] | None = None
++
++
++class ProviderInfo(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    provider_id: str
++    provider_display_name: str
++    models: list[ModelInfo]
++
++
++class CatalogResponse(BaseModel):
++    model_config = ConfigDict(extra="forbid")
++
++    providers: list[ProviderInfo]
++
++
++@dataclass(frozen=True)
++class _InternalModelConfig:
++    model_id: str
++    model_display_name: str
++    capabilities: dict[str, Any] | None = None
++    input_price_per_million: Decimal | None = None
++    output_price_per_million: Decimal | None = None
++
++
++@dataclass(frozen=True)
++class _InternalProviderConfig:
++    provider_id: str
++    provider_display_name: str
++    models: dict[str, _InternalModelConfig]
++    api_key: str | None = None
++    base_url: str | None = None
++    extra_body: dict[str, object] | None = None
++
++
++class ProviderCatalogError(Exception):
++    """Catalog configuration or loading failed."""
++
++    pass
++
++
++class ProviderRegistry:
++    """Backend-controlled registry of available providers and models.
++
++    Produces a safe, credential-free catalog for the frontend and can
++    instantiate run-scoped LLM providers from resolved selections.
++    """
++
++    def __init__(
++        self,
++        settings: Settings,
++        scenario_controller: ScenarioController | None = None,
++    ) -> None:
++        self._settings = settings
++        self._scenario_controller = scenario_controller
++        self._providers: dict[str, _InternalProviderConfig] = {}
++        self._test_catalog_override: CatalogResponse | None = None
++        self._test_catalog_error: bool = False
++        self._build_catalog()
++
++    def _build_catalog(self) -> None:
++        if self._settings.enable_mock_llm:
++            mock_models: dict[str, _InternalModelConfig] = {
++                "mock-default": _InternalModelConfig(
++                    model_id="mock-default",
++                    model_display_name="Mock PRD Model",
++                    capabilities=None,
++                    input_price_per_million=Decimal("0"),
++                    output_price_per_million=Decimal("0"),
++                ),
++            }
++            self._providers["mock"] = _InternalProviderConfig(
++                provider_id="mock",
++                provider_display_name="Mock Provider",
++                models=mock_models,
++            )
++        else:
++            if self._settings.llm_provider == "deepseek":
++                if self._settings.deepseek_api_key is None:
++                    raise ProviderCatalogError("DeepSeek API key is not configured")
++                models: dict[str, _InternalModelConfig] = {
++                    self._settings.deepseek_model: _InternalModelConfig(
++                        model_id=self._settings.deepseek_model,
++                        model_display_name=self._settings.deepseek_model,
++                        capabilities=None,
++                        input_price_per_million=self._settings.model_input_price_per_million,
++                        output_price_per_million=self._settings.model_output_price_per_million,
++                    ),
++                }
++                self._providers["deepseek"] = _InternalProviderConfig(
++                    provider_id="deepseek",
++                    provider_display_name="DeepSeek",
++                    models=models,
++                    api_key=self._settings.deepseek_api_key.get_secret_value(),
++                    base_url=self._settings.deepseek_base_url,
++                    extra_body={"thinking": {"type": "disabled"}},
++                )
++            elif self._settings.llm_provider == "glm":
++                if self._settings.glm_api_key is None:
++                    raise ProviderCatalogError("GLM API key is not configured")
++                models = {
++                    self._settings.glm_model: _InternalModelConfig(
++                        model_id=self._settings.glm_model,
++                        model_display_name=self._settings.glm_model,
++                        capabilities=None,
++                        input_price_per_million=self._settings.model_input_price_per_million,
++                        output_price_per_million=self._settings.model_output_price_per_million,
++                    ),
++                }
++                self._providers["glm"] = _InternalProviderConfig(
++                    provider_id="glm",
++                    provider_display_name="GLM",
++                    models=models,
++                    api_key=self._settings.glm_api_key.get_secret_value(),
++                    base_url=self._settings.glm_base_url,
++                )
++
++    def catalog(self) -> CatalogResponse:
++        if self._test_catalog_error:
++            raise ProviderCatalogError("Simulated catalog failure")
++        if self._test_catalog_override is not None:
++            return self._test_catalog_override
++        providers: list[ProviderInfo] = []
++        for cfg in self._providers.values():
++            models = [
++                ModelInfo(
++                    model_id=m.model_id,
++                    model_display_name=m.model_display_name,
++                    capabilities=m.capabilities,
++                )
++                for m in cfg.models.values()
++            ]
++            providers.append(
++                ProviderInfo(
++                    provider_id=cfg.provider_id,
++                    provider_display_name=cfg.provider_display_name,
++                    models=models,
++                )
++            )
++        return CatalogResponse(providers=providers)
++
++    def _test_set_empty(self) -> None:
++        self._test_catalog_override = CatalogResponse(providers=[])
++        self._test_catalog_error = False
++
++    def _test_set_error(self) -> None:
++        self._test_catalog_override = None
++        self._test_catalog_error = True
++
++    def _test_clear_override(self) -> None:
++        self._test_catalog_override = None
++        self._test_catalog_error = False
++
++    def default_selection(self) -> tuple[str, str]:
++        """Return the default provider_id, model_id for legacy requests."""
++        if self._settings.enable_mock_llm:
++            return ("mock", "mock-default")
++        provider = self._settings.llm_provider
++        model = (
++            self._settings.deepseek_model
++            if provider == "deepseek"
++            else self._settings.glm_model
++        )
++        return (provider, model)
++
++    def resolve(self, provider_id: str, model_id: str) -> tuple[str, str, bool]:
++        """Resolve a selection to display names and pricing availability.
++
++        Returns (provider_display_name, model_display_name, has_pricing).
++        Raises ValueError if the selection is invalid.
++        """
++        cfg = self._providers.get(provider_id)
++        if cfg is None:
++            raise ValueError(f"Unknown provider: {provider_id}")
++        model = cfg.models.get(model_id)
++        if model is None:
++            raise ValueError(f"Unknown model '{model_id}' for provider '{provider_id}'")
++        has_pricing = (
++            model.input_price_per_million is not None
++            and model.output_price_per_million is not None
++        )
++        return (cfg.provider_display_name, model.model_display_name, has_pricing)
++
++    def create_provider(
++        self,
++        provider_id: str,
++        model_id: str,
++    ) -> LLMProvider:
++        """Instantiate an LLMProvider for a resolved selection."""
++        cfg = self._providers.get(provider_id)
++        if cfg is None:
++            raise ValueError(f"Unknown provider: {provider_id}")
++        model = cfg.models.get(model_id)
++        if model is None:
++            raise ValueError(f"Unknown model '{model_id}' for provider '{provider_id}'")
++
++        if provider_id == "mock":
++            if self._settings.e2e_test_mode and self._scenario_controller is not None:
++                return ScenarioMockLLMProvider(
++                    controller=self._scenario_controller,
++                    timeout_delay=self._settings.generator_timeout_seconds + 0.5,
++                    delays_enabled=self._settings.mock_delays_enabled,
++                    chunk_size=self._settings.mock_chunk_size,
++                    generator_delay=self._settings.mock_generator_delay_seconds,
++                    reviewer_delay=self._settings.mock_reviewer_delay_seconds,
++                    optimizer_delay=self._settings.mock_optimizer_delay_seconds,
++                    reviewer_stagger=0.4,
++                )
++            return MockLLMProvider(
++                delays_enabled=self._settings.mock_delays_enabled,
++                chunk_size=self._settings.mock_chunk_size,
++                generator_delay=self._settings.mock_generator_delay_seconds,
++                reviewer_delay=self._settings.mock_reviewer_delay_seconds,
++                optimizer_delay=self._settings.mock_optimizer_delay_seconds,
++            )
++
++        assert cfg.api_key is not None
++        assert cfg.base_url is not None
++        has_pricing = (
++            model.input_price_per_million is not None
++            and model.output_price_per_million is not None
++        )
++        return OpenAICompatibleLLMProvider(
++            provider_name=provider_id,
++            api_key=cfg.api_key,
++            base_url=cfg.base_url,
++            model=model_id,
++            request_timeout_seconds=self._settings.llm_request_timeout_seconds,
++            max_output_tokens=self._settings.llm_max_output_tokens,
++            extra_body=cfg.extra_body or {},
++            has_pricing=has_pricing,
++        )
++
++    def is_available(self, provider_id: str, model_id: str) -> bool:
++        cfg = self._providers.get(provider_id)
++        if cfg is None:
++            return False
++        return model_id in cfg.models
+diff --git a/backend/main.py b/backend/main.py
+index ffed52a..1206d0b 100644
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -17,14 +17,12 @@ from pydantic import BaseModel, ConfigDict
+ from pydantic.json_schema import models_json_schema
+ from sse_starlette.sse import EventSourceResponse
+ 
++from backend.catalog import CatalogResponse, ProviderCatalogError, ProviderRegistry
+ from backend.config import Settings, get_settings
+ from backend.errors import AppError, ProviderUnavailableError
+ from backend.event_store import EventStore, SQLiteEventStore
+ from backend.observability import log_event
+ from backend.providers.base import LLMProvider
+-from backend.providers.compatible import OpenAICompatibleLLMProvider
+-from backend.providers.mock import MockLLMProvider
+-from backend.providers.scenario import ScenarioController, ScenarioMockLLMProvider
+ from backend.run_manager import RunManager
+ from backend.run_store import InMemoryRunStore, SQLiteRunStore
+ from backend.schemas import (
+@@ -86,52 +84,26 @@ def create_app(
+     *,
+     settings: Settings | None = None,
+     provider: LLMProvider | None = None,
++    provider_registry: ProviderRegistry | None = None,
+ ) -> FastAPI:
+     app_settings = settings or get_settings()
+-    scenario_controller: ScenarioController | None = None
+-    if provider is None:
+-        if app_settings.enable_mock_llm:
+-            if app_settings.e2e_test_mode:
+-                scenario_controller = ScenarioController()
+-                provider = ScenarioMockLLMProvider(
+-                    controller=scenario_controller,
+-                    timeout_delay=app_settings.generator_timeout_seconds + 0.5,
+-                    delays_enabled=app_settings.mock_delays_enabled,
+-                    chunk_size=app_settings.mock_chunk_size,
+-                    generator_delay=app_settings.mock_generator_delay_seconds,
+-                    reviewer_delay=app_settings.mock_reviewer_delay_seconds,
+-                    optimizer_delay=app_settings.mock_optimizer_delay_seconds,
+-                    reviewer_stagger=0.4,
+-                )
+-            else:
+-                provider = MockLLMProvider(
+-                    delays_enabled=app_settings.mock_delays_enabled,
+-                    chunk_size=app_settings.mock_chunk_size,
+-                    generator_delay=app_settings.mock_generator_delay_seconds,
+-                    reviewer_delay=app_settings.mock_reviewer_delay_seconds,
+-                    optimizer_delay=app_settings.mock_optimizer_delay_seconds,
+-                )
+-        else:
+-            if app_settings.llm_provider == "deepseek":
+-                api_key = app_settings.deepseek_api_key
+-                base_url = app_settings.deepseek_base_url
+-                model = app_settings.deepseek_model
+-            else:
+-                api_key = app_settings.glm_api_key
+-                base_url = app_settings.glm_base_url
+-                model = app_settings.glm_model
+-            extra_body: dict[str, object] = {"thinking": {"type": "disabled"}}
+-            if api_key is None:
+-                raise ProviderUnavailableError
+-            provider = OpenAICompatibleLLMProvider(
+-                provider_name=app_settings.llm_provider,
+-                api_key=api_key.get_secret_value(),
+-                base_url=base_url,
+-                model=model,
+-                request_timeout_seconds=app_settings.llm_request_timeout_seconds,
+-                max_output_tokens=app_settings.llm_max_output_tokens,
+-                extra_body=extra_body,
++    scenario_controller = None
++    if provider_registry is None:
++        from backend.providers.scenario import ScenarioController
++
++        if app_settings.e2e_test_mode:
++            scenario_controller = ScenarioController()
++        try:
++            provider_registry = ProviderRegistry(
++                app_settings, scenario_controller=scenario_controller
+             )
++        except ProviderCatalogError as exc:
++            raise ProviderUnavailableError from exc
++    if provider is None:
++        default_provider_id, default_model_id = provider_registry.default_selection()
++        provider = provider_registry.create_provider(
++            default_provider_id, default_model_id
++        )
+     if app_settings.database_path == ":memory:":
+         run_store = InMemoryRunStore(
+             max_runs=app_settings.max_retained_runs,
+@@ -156,6 +128,7 @@ def create_app(
+     manager = RunManager(
+         settings=app_settings,
+         provider=provider,
++        provider_registry=provider_registry,
+         run_store=run_store,
+         event_store=event_store,
+     )
+@@ -263,6 +236,29 @@ def create_app(
+                 ) from exc
+             return {"scenario": selected}
+ 
++        @application.put("/api/test/catalog-empty", tags=["test"])
++        async def set_catalog_empty() -> dict[str, str]:
++            provider_registry._test_set_empty()
++            return {"catalog": "empty"}
++
++        @application.put("/api/test/catalog-error", tags=["test"])
++        async def set_catalog_error() -> dict[str, str]:
++            provider_registry._test_set_error()
++            return {"catalog": "error"}
++
++        @application.put("/api/test/catalog-restore", tags=["test"])
++        async def restore_catalog() -> dict[str, str]:
++            provider_registry._test_clear_override()
++            return {"catalog": "restored"}
++
++    @application.get(
++        "/api/providers",
++        response_model=CatalogResponse,
++        tags=["system"],
++    )
++    async def get_providers() -> CatalogResponse:
++        return provider_registry.catalog()
++
+     @application.get(
+         "/api/runs",
+         response_model=RunListResponse,
+diff --git a/backend/providers/base.py b/backend/providers/base.py
+index 91415a7..5e86817 100644
+--- a/backend/providers/base.py
++++ b/backend/providers/base.py
+@@ -35,6 +35,7 @@ class ProviderStructuredResult(BaseModel):
+ 
+ class LLMProvider(ABC):
+     is_mock: bool = False
++    has_pricing: bool = False
+ 
+     @abstractmethod
+     def stream_prd(
+diff --git a/backend/providers/compatible.py b/backend/providers/compatible.py
+index c4100b5..3917271 100644
+--- a/backend/providers/compatible.py
++++ b/backend/providers/compatible.py
+@@ -59,12 +59,14 @@ class OpenAICompatibleLLMProvider(LLMProvider):
+         max_output_tokens: int | None = None,
+         extra_body: dict[str, object] | None = None,
+         client: Any | None = None,
++        has_pricing: bool = False,
+     ) -> None:
+         self.provider_name = provider_name
+         self.model = model
+         self.request_timeout_seconds = request_timeout_seconds
+         self.max_output_tokens = max_output_tokens
+         self.extra_body = extra_body
++        self.has_pricing = has_pricing
+         self.client: Any = client or AsyncOpenAI(
+             api_key=api_key,
+             base_url=base_url,
+diff --git a/backend/providers/mock.py b/backend/providers/mock.py
+index da33382..c6fc689 100644
+--- a/backend/providers/mock.py
++++ b/backend/providers/mock.py
+@@ -151,6 +151,7 @@ SEVERITY_PRIORITY: dict[FeedbackSeverity, RevisionPriority] = {
+ 
+ class MockLLMProvider(LLMProvider):
+     is_mock = True
++    has_pricing = True
+ 
+     def __init__(
+         self,
+diff --git a/backend/run_manager.py b/backend/run_manager.py
+index ef243e0..6fa8fff 100644
+--- a/backend/run_manager.py
++++ b/backend/run_manager.py
+@@ -7,8 +7,9 @@ from time import monotonic
+ from typing import Any, Protocol
+ from uuid import UUID, uuid4
+ 
++from backend.catalog import ProviderRegistry
+ from backend.config import Settings
+-from backend.errors import RunCapacityError, RunConflictError
++from backend.errors import AppError, RunCapacityError, RunConflictError
+ from backend.event_store import TRANSIENT_EVENT_TYPES, EventStore
+ from backend.language import detect_output_language
+ from backend.observability import log_event
+@@ -46,11 +47,13 @@ class RunManager:
+         *,
+         settings: Settings,
+         provider: LLMProvider,
++        provider_registry: ProviderRegistry,
+         run_store: InMemoryRunStore,
+         event_store: EventStore,
+     ) -> None:
+         self.settings = settings
+         self.provider = provider
++        self.provider_registry = provider_registry
+         self.run_store = run_store
+         self.event_store = event_store
+         self.workflow: WorkflowRunner | None = None
+@@ -65,6 +68,23 @@ class RunManager:
+         self._accepting = True
+         self._create_lock = asyncio.Lock()
+         self._task_lock = asyncio.Lock()
++        self._run_providers: dict[UUID, LLMProvider] = {}
++        # Default metadata for legacy runs that use the injected provider
++        self._default_provider_id = "unknown"
++        self._default_model_id = "unknown"
++        self._default_provider_display_name = type(provider).__name__
++        self._default_model_display_name = "unknown"
++        self._default_has_pricing = getattr(provider, "has_pricing", False)
++        try:
++            dp_id, dm_id = provider_registry.default_selection()
++            resolved = provider_registry.resolve(dp_id, dm_id)
++            self._default_provider_id = dp_id
++            self._default_model_id = dm_id
++            self._default_provider_display_name = resolved[0]
++            self._default_model_display_name = resolved[1]
++            self._default_has_pricing = resolved[2]
++        except Exception:
++            pass
+ 
+     def set_workflow(self, workflow: WorkflowRunner) -> None:
+         self.workflow = workflow
+@@ -120,6 +140,21 @@ class RunManager:
+         for key in [key for key in self._node_started if key[0] == run_id]:
+             self._node_started.pop(key, None)
+         self.tasks.pop(run_id, None)
++        self._run_providers.pop(run_id, None)
++
++    def provider_for(self, run_id: UUID) -> LLMProvider:
++        cached = self._run_providers.get(run_id)
++        if cached is not None:
++            return cached
++        state = self.run_store.get_unlocked(run_id)
++        if state.provider_id is not None and state.model_id is not None:
++            provider = self.provider_registry.create_provider(
++                state.provider_id, state.model_id
++            )
++        else:
++            provider = self.provider
++        self._run_providers[run_id] = provider
++        return provider
+ 
+     async def create_run(self, request: CreateRunRequest) -> RunSnapshot:
+         if not self._accepting:
+@@ -130,6 +165,33 @@ class RunManager:
+             for evicted in await self.run_store.make_room():
+                 self._release_run_resources(evicted)
+                 log_event(LOGGER, "run_evicted_for_retention", run_id=evicted)
++
++            # Resolve provider / model selection
++            if request.provider_id is not None and request.model_id is not None:
++                try:
++                    resolved = self.provider_registry.resolve(
++                        request.provider_id, request.model_id
++                    )
++                except ValueError as exc:
++                    raise AppError(
++                        "INVALID_PROVIDER_SELECTION",
++                        str(exc),
++                        422,
++                    ) from exc
++                provider_id = request.provider_id
++                model_id = request.model_id
++                provider_display_name = resolved[0]
++                model_display_name = resolved[1]
++                run_provider = self.provider_registry.create_provider(
++                    provider_id, model_id
++                )
++            else:
++                provider_id = self._default_provider_id
++                model_id = self._default_model_id
++                provider_display_name = self._default_provider_display_name
++                model_display_name = self._default_model_display_name
++                run_provider = self.provider
++
+             run_id = uuid4()
+             now = utc_now()
+             snapshot = RunSnapshot(
+@@ -137,9 +199,6 @@ class RunManager:
+                 user_idea=request.user_idea,
+                 target_audience=request.target_audience,
+                 user_constraints=request.user_constraints,
+-                # Decided once, from the user's own words, so the generator, all
+-                # three reviewers, and the optimizer cannot each pick a different
+-                # language from their own slice of the input.
+                 output_language=detect_output_language(
+                     request.user_idea,
+                     request.target_audience,
+@@ -155,12 +214,17 @@ class RunManager:
+                     "aggregator": NodeStatus.PENDING,
+                     "optimizer": NodeStatus.PENDING,
+                 },
+-                is_mock=self.provider.is_mock,
+-                cost_available=self.provider.is_mock or self.settings.has_model_pricing,
++                is_mock=run_provider.is_mock,
++                cost_available=run_provider.has_pricing,
++                provider_id=provider_id,
++                provider_display_name=provider_display_name,
++                model_id=model_id,
++                model_display_name=model_display_name,
+                 created_at=now,
+                 updated_at=now,
+             )
+             await self.run_store.create(snapshot)
++            self._run_providers[run_id] = run_provider
+             self.event_store.create_run(run_id)
+             self.cancel_signals[run_id] = asyncio.Event()
+             self.resume_signals[run_id] = asyncio.Event()
+@@ -171,8 +235,8 @@ class RunManager:
+             LOGGER,
+             "run_accepted",
+             run_id=run_id,
+-            provider=type(self.provider).__name__,
+-            mock=self.provider.is_mock,
++            provider=type(run_provider).__name__,
++            mock=run_provider.is_mock,
+         )
+         return snapshot.model_copy(deep=True)
+ 
+@@ -521,6 +585,7 @@ class RunManager:
+         usage: TokenUsage,
+     ) -> RunSnapshot:
+         event_payload: dict[str, Any] = {}
++        run_provider = self.provider_for(run_id)
+ 
+         def mutate(state: RunSnapshot) -> None:
+             previous = state.node_tokens.get(node, TokenUsage())
+@@ -529,10 +594,11 @@ class RunManager:
+             state.estimated_cost_usd = estimate_cost(
+                 state.total_tokens,
+                 self.settings,
+-                is_mock=self.provider.is_mock,
++                is_mock=run_provider.is_mock,
++                has_pricing=run_provider.has_pricing,
+             )
+             state.cost_available = (
+-                self.provider.is_mock or state.estimated_cost_usd is not None
++                run_provider.has_pricing or state.estimated_cost_usd is not None
+             )
+             event_payload.update(
+                 {
+@@ -646,6 +712,6 @@ class RunManager:
+                 run_id=run_id,
+                 node=node,
+                 role=role,
+-                provider=type(self.provider).__name__,
++                provider=type(self.provider_for(run_id)).__name__,
+             )
+         return result
+diff --git a/backend/run_store.py b/backend/run_store.py
+index 8972296..12a07d7 100644
+--- a/backend/run_store.py
++++ b/backend/run_store.py
+@@ -158,6 +158,10 @@ class InMemoryRunStore:
+                     best_score=snapshot.best_score,
+                     created_at=snapshot.created_at,
+                     updated_at=snapshot.updated_at,
++                    provider_id=snapshot.provider_id,
++                    provider_display_name=snapshot.provider_display_name,
++                    model_id=snapshot.model_id,
++                    model_display_name=snapshot.model_display_name,
+                 )
+                 for snapshot in snapshots
+             ]
+diff --git a/backend/schemas.py b/backend/schemas.py
+index d38d8a5..01eb881 100644
+--- a/backend/schemas.py
++++ b/backend/schemas.py
+@@ -104,6 +104,8 @@ class CreateRunRequest(StrictModel):
+     user_constraints: str | None = Field(default=None, max_length=2000)
+     quality_threshold: float = Field(default=85.0, ge=50, le=100)
+     max_iterations: int = Field(default=3, ge=1, le=5)
++    provider_id: str | None = Field(default=None, min_length=1, max_length=100)
++    model_id: str | None = Field(default=None, min_length=1, max_length=100)
+ 
+     @field_validator("user_idea")
+     @classmethod
+@@ -121,6 +123,16 @@ class CreateRunRequest(StrictModel):
+         normalized = value.strip()
+         return normalized or None
+ 
++    @model_validator(mode="after")
++    def validate_selection(self) -> CreateRunRequest:
++        has_provider = self.provider_id is not None
++        has_model = self.model_id is not None
++        if has_provider != has_model:
++            raise ValueError(
++                "provider_id and model_id must be provided together or omitted together"
++            )
++        return self
++
+ 
+ class ResumeRunRequest(StrictModel):
+     user_override: str | None = Field(default=None, max_length=2000)
+@@ -379,6 +391,10 @@ class PRDRunState(StrictModel):
+     started_at: datetime | None = None
+     completed_at: datetime | None = None
+     error: RunError | None = None
++    provider_id: str | None = Field(default=None, max_length=100)
++    provider_display_name: str | None = Field(default=None, max_length=200)
++    model_id: str | None = Field(default=None, max_length=100)
++    model_display_name: str | None = Field(default=None, max_length=200)
+ 
+     @model_validator(mode="after")
+     def validate_iteration(self) -> PRDRunState:
+@@ -402,6 +418,10 @@ class RunSummary(StrictModel):
+     best_score: float | None = Field(default=None, ge=0, le=100)
+     created_at: datetime
+     updated_at: datetime
++    provider_id: str | None = Field(default=None, max_length=100)
++    provider_display_name: str | None = Field(default=None, max_length=200)
++    model_id: str | None = Field(default=None, max_length=100)
++    model_display_name: str | None = Field(default=None, max_length=200)
+ 
+ 
+ class RunListResponse(StrictModel):
+diff --git a/backend/telemetry.py b/backend/telemetry.py
+index 8a2acae..a3edf6e 100644
+--- a/backend/telemetry.py
++++ b/backend/telemetry.py
+@@ -21,10 +21,14 @@ def estimate_cost(
+     settings: Settings,
+     *,
+     is_mock: bool,
++    has_pricing: bool | None = None,
+ ) -> float | None:
+     if is_mock:
+         return 0.0
+-    if not settings.has_model_pricing:
++    effective_has_pricing = (
++        has_pricing if has_pricing is not None else settings.has_model_pricing
++    )
++    if not effective_has_pricing:
+         return None
+     assert settings.model_input_price_per_million is not None
+     assert settings.model_output_price_per_million is not None
+diff --git a/backend/tests/helpers.py b/backend/tests/helpers.py
+index 326edb8..b5bc11f 100644
+--- a/backend/tests/helpers.py
++++ b/backend/tests/helpers.py
+@@ -2,6 +2,7 @@ from __future__ import annotations
+ 
+ from typing import Any
+ 
++from backend.catalog import ProviderRegistry
+ from backend.config import Settings
+ from backend.event_store import EventStore, SQLiteEventStore
+ from backend.providers.base import LLMProvider
+@@ -33,6 +34,7 @@ def make_manager(
+ ) -> RunManager:
+     resolved_settings = settings or make_settings()
+     resolved_provider = provider or MockLLMProvider(delays_enabled=False)
++    registry = ProviderRegistry(resolved_settings)
+     store = InMemoryRunStore(
+         max_runs=resolved_settings.max_retained_runs,
+         ttl_seconds=resolved_settings.run_ttl_seconds,
+@@ -44,6 +46,7 @@ def make_manager(
+     manager = RunManager(
+         settings=resolved_settings,
+         provider=resolved_provider,
++        provider_registry=registry,
+         run_store=store,
+         event_store=events,
+     )
+@@ -60,6 +63,7 @@ def make_sqlite_manager(
+     """A manager backed by the real SQLite stores, as `create_app` wires them."""
+     resolved_settings = settings or make_settings(database_path=database_path)
+     resolved_provider = provider or MockLLMProvider(delays_enabled=False)
++    registry = ProviderRegistry(resolved_settings)
+     store = SQLiteRunStore(
+         database_path=database_path,
+         max_runs=resolved_settings.max_retained_runs,
+@@ -74,6 +78,7 @@ def make_sqlite_manager(
+     manager = RunManager(
+         settings=resolved_settings,
+         provider=resolved_provider,
++        provider_registry=registry,
+         run_store=store,
+         event_store=events,
+     )
+diff --git a/backend/tests/test_node_timings.py b/backend/tests/test_node_timings.py
+index 176f5eb..667e778 100644
+--- a/backend/tests/test_node_timings.py
++++ b/backend/tests/test_node_timings.py
+@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
+ 
+ import pytest
+ 
++from backend.language import DEFAULT_OUTPUT_LANGUAGE
+ from backend.prd_document import PRD_COMPLETION_MARKER
+ from backend.prompts import (
+     COMPOSITION_RULES,
+@@ -28,11 +29,9 @@ from backend.schemas import (
+ )
+ from backend.tests.helpers import make_manager
+ 
+-from backend.language import DEFAULT_OUTPUT_LANGUAGE
+-
+ 
+ async def test_every_node_call_records_its_own_duration() -> None:
+-    """"Which node is slow" is only answerable if the calls stay separate."""
++    """ "Which node is slow" is only answerable if the calls stay separate."""
+     manager = make_manager()
+     created = await manager.create_run(
+         CreateRunRequest(user_idea="Build a product whose timings are recorded.")
+@@ -243,9 +242,7 @@ async def test_a_failed_v2_leaves_v1_its_reviews_and_its_plan_intact() -> None:
+     assert result.current_iteration == 2
+ 
+ 
+-@pytest.mark.parametrize(
+-    "prompt", [GENERATOR_SYSTEM_PROMPT, OPTIMIZER_SYSTEM_PROMPT]
+-)
++@pytest.mark.parametrize("prompt", [GENERATOR_SYSTEM_PROMPT, OPTIMIZER_SYSTEM_PROMPT])
+ def test_no_prompt_leaks_provider_or_process_detail(prompt: str) -> None:
+     assert "api_key" not in prompt.lower()
+     assert "traceback" not in prompt.lower()
+diff --git a/backend/tests/test_provider_catalog.py b/backend/tests/test_provider_catalog.py
+new file mode 100644
+index 0000000..8f8c368
+--- /dev/null
++++ b/backend/tests/test_provider_catalog.py
+@@ -0,0 +1,453 @@
++from __future__ import annotations
++
++from decimal import Decimal
++from pathlib import Path
++from uuid import UUID
++
++import pytest
++
++from backend.catalog import CatalogResponse, ProviderCatalogError, ProviderRegistry
++from backend.errors import AppError
++from backend.main import create_app
++from backend.providers.compatible import OpenAICompatibleLLMProvider
++from backend.providers.mock import MockLLMProvider
++from backend.schemas import CreateRunRequest, ResumeRunRequest, RunSnapshot, RunStatus
++from backend.tests.helpers import make_manager, make_settings, make_sqlite_manager
++from backend.tests.test_api import client_for, valid_request
++from backend.tests.test_workflow import wait_for_status
++
++
++def test_catalog_success_shape() -> None:
++    settings = make_settings()
++    registry = ProviderRegistry(settings)
++    catalog = registry.catalog()
++    assert isinstance(catalog, CatalogResponse)
++    assert len(catalog.providers) == 1
++    provider = catalog.providers[0]
++    assert provider.provider_id == "mock"
++    assert provider.provider_display_name == "Mock Provider"
++    assert len(provider.models) == 1
++    model = provider.models[0]
++    assert model.model_id == "mock-default"
++    assert model.model_display_name == "Mock PRD Model"
++    assert model.capabilities is None
++
++
++def test_catalog_never_exposes_credentials_or_pricing() -> None:
++    settings = make_settings(
++        enable_mock_llm=False,
++        llm_provider="deepseek",
++        deepseek_api_key="sk-test",
++        deepseek_base_url="https://secret.example.com",
++        model_input_price_per_million=Decimal("1.5"),
++        model_output_price_per_million=Decimal("2.0"),
++    )
++    registry = ProviderRegistry(settings)
++    catalog = registry.catalog()
++    dumped = catalog.model_dump(mode="json")
++    dumped_str = str(dumped)
++    assert "sk-test" not in dumped_str
++    assert "secret.example.com" not in dumped_str
++    assert "1.5" not in dumped_str
++    assert "2.0" not in dumped_str
++
++
++def test_catalog_failure_is_not_silenced() -> None:
++    settings = make_settings(enable_mock_llm=True)
++    settings.enable_mock_llm = False
++    settings.llm_provider = "deepseek"
++    settings.deepseek_api_key = None
++    with pytest.raises(ProviderCatalogError):
++        ProviderRegistry(settings)
++
++
++async def test_explicit_selection_creates_run_and_persists_metadata() -> None:
++    manager = make_manager()
++    created = await manager.create_run(
++        CreateRunRequest(
++            user_idea="Build a product with explicit selection.",
++            provider_id="mock",
++            model_id="mock-default",
++        )
++    )
++    snapshot = await manager.get_run(created.run_id)
++    assert snapshot.provider_id == "mock"
++    assert snapshot.provider_display_name == "Mock Provider"
++    assert snapshot.model_id == "mock-default"
++    assert snapshot.model_display_name == "Mock PRD Model"
++    assert snapshot.is_mock is True
++    await manager.shutdown()
++
++
++async def test_unknown_provider_fails_without_creating_run() -> None:
++    manager = make_manager()
++    with pytest.raises(AppError) as exc_info:
++        await manager.create_run(
++            CreateRunRequest(
++                user_idea="Build a product with unknown provider.",
++                provider_id="unknown",
++                model_id="mock-default",
++            )
++        )
++    assert exc_info.value.code == "INVALID_PROVIDER_SELECTION"
++    assert await manager.run_store.count() == 0
++    await manager.shutdown()
++
++
++async def test_unknown_model_fails_without_creating_run() -> None:
++    manager = make_manager()
++    with pytest.raises(AppError) as exc_info:
++        await manager.create_run(
++            CreateRunRequest(
++                user_idea="Build a product with unknown model.",
++                provider_id="mock",
++                model_id="unknown",
++            )
++        )
++    assert exc_info.value.code == "INVALID_PROVIDER_SELECTION"
++    assert await manager.run_store.count() == 0
++    await manager.shutdown()
++
++
++async def test_cross_pair_mismatch_fails() -> None:
++    manager = make_manager()
++    with pytest.raises(AppError) as exc_info:
++        await manager.create_run(
++            CreateRunRequest(
++                user_idea="Build a product with cross mismatch.",
++                provider_id="mock",
++                model_id="deepseek-v4-flash",
++            )
++        )
++    assert exc_info.value.code == "INVALID_PROVIDER_SELECTION"
++    assert await manager.run_store.count() == 0
++    await manager.shutdown()
++
++
++async def test_only_one_selection_field_fails() -> None:
++    from pydantic import ValidationError
++
++    with pytest.raises(ValidationError, match="must be provided together"):
++        CreateRunRequest(
++            user_idea="Build a product with only provider_id.",
++            provider_id="mock",
++        )
++
++
++async def test_legacy_request_without_selection_still_works() -> None:
++    manager = make_manager()
++    created = await manager.create_run(
++        CreateRunRequest(user_idea="Build a legacy compatible product.")
++    )
++    snapshot = await manager.get_run(created.run_id)
++    assert snapshot.provider_id == "mock"
++    assert snapshot.model_id == "mock-default"
++    assert snapshot.status is RunStatus.QUEUED
++    await manager.shutdown()
++
++
++async def test_old_snapshot_without_provider_fields_loads_safely() -> None:
++    manager = make_manager()
++    created = await manager.create_run(
++        CreateRunRequest(user_idea="Build an old-format product.")
++    )
++    # Simulate an old snapshot by stripping the new fields
++    snapshot = await manager.get_run(created.run_id)
++    raw = snapshot.model_dump(mode="json")
++    del raw["provider_id"]
++    del raw["provider_display_name"]
++    del raw["model_id"]
++    del raw["model_display_name"]
++    old_snapshot = RunSnapshot.model_validate(raw)
++    await manager.run_store.save_unlocked(created.run_id)
++
++    # Reconstruct manager and verify old run loads
++    fresh_manager = make_manager()
++    raw_old = old_snapshot.model_dump_json()
++    await fresh_manager.run_store.create(RunSnapshot.model_validate_json(raw_old))
++    loaded = await fresh_manager.get_run(created.run_id)
++    assert loaded.provider_id is None
++    assert loaded.model_id is None
++    await manager.shutdown()
++    await fresh_manager.shutdown()
++
++
++async def test_no_ddl_migration_required() -> None:
++    manager = make_manager()
++    created = await manager.create_run(
++        CreateRunRequest(
++            user_idea="Build a product verifying no DDL.",
++            provider_id="mock",
++            model_id="mock-default",
++        )
++    )
++    snapshot = await manager.get_run(created.run_id)
++    assert snapshot.provider_id is not None
++    await manager.shutdown()
++
++
++async def test_persisted_selection_survives_service_restart() -> None:
++    database_path = "test_restart.sqlite3"
++    manager = make_sqlite_manager(database_path=database_path)
++    created = await manager.create_run(
++        CreateRunRequest(
++            user_idea="Build a product that survives restart.",
++            provider_id="mock",
++            model_id="mock-default",
++        )
++    )
++    await manager.wait_for_completion(created.run_id, wait_seconds=5)
++    await manager.shutdown()
++
++    second_manager = make_sqlite_manager(database_path=database_path)
++    snapshot = await second_manager.get_run(created.run_id)
++    assert snapshot.provider_id == "mock"
++    assert snapshot.provider_display_name == "Mock Provider"
++    assert snapshot.model_id == "mock-default"
++    assert snapshot.model_display_name == "Mock PRD Model"
++    await second_manager.shutdown()
++
++    Path(database_path).unlink(missing_ok=True)
++
++
++async def test_concurrent_runs_with_different_selections_stay_isolated() -> None:
++    manager = make_manager()
++    first = await manager.create_run(
++        CreateRunRequest(
++            user_idea="Build the first isolated product.",
++            provider_id="mock",
++            model_id="mock-default",
++        )
++    )
++    second = await manager.create_run(
++        CreateRunRequest(
++            user_idea="Build the second isolated product.",
++            provider_id="mock",
++            model_id="mock-default",
++        )
++    )
++    assert first.provider_id == second.provider_id
++    assert first.model_id == second.model_id
++    # Each run has its own provider cached
++    assert manager.provider_for(first.run_id) is manager.provider_for(first.run_id)
++    await manager.shutdown()
++
++
++async def test_unavailable_persisted_selection_fails_on_rehydration() -> None:
++    database_path = "test_unavailable.sqlite3"
++    manager = make_sqlite_manager(database_path=database_path)
++    created = await manager.create_run(
++        CreateRunRequest(
++            user_idea="Build a product that later becomes unavailable.",
++            provider_id="mock",
++            model_id="mock-default",
++        )
++    )
++    await manager.wait_for_completion(created.run_id, wait_seconds=5)
++    await manager.shutdown()
++
++    # Create a new manager with a registry that does not know "mock"
++    fresh_manager = make_sqlite_manager(
++        database_path=database_path,
++        settings=make_settings(
++            enable_mock_llm=False,
++            llm_provider="deepseek",
++            deepseek_api_key="sk-test",
++        ),
++    )
++    # Attempting to resume or read metadata should still work, but provider access fails
++    snapshot = await fresh_manager.get_run(created.run_id)
++    assert snapshot.provider_id == "mock"
++    assert snapshot.model_id == "mock-default"
++    # provider_for should raise because the registry no longer has "mock"
++    with pytest.raises(ValueError, match="Unknown provider"):
++        fresh_manager.provider_for(created.run_id)
++    await fresh_manager.shutdown()
++
++    Path(database_path).unlink(missing_ok=True)
++
++
++async def test_per_model_pricing_is_used() -> None:
++    settings = make_settings(
++        enable_mock_llm=False,
++        llm_provider="deepseek",
++        deepseek_api_key="sk-test",
++        model_input_price_per_million=Decimal("1.0"),
++        model_output_price_per_million=Decimal("2.0"),
++    )
++    registry = ProviderRegistry(settings)
++    _, _, has_pricing = registry.resolve("deepseek", settings.deepseek_model)
++    assert has_pricing is True
++
++    provider = registry.create_provider("deepseek", settings.deepseek_model)
++    assert isinstance(provider, OpenAICompatibleLLMProvider)
++    assert provider.has_pricing is True
++
++
++async def test_missing_pricing_returns_null_not_zero() -> None:
++    settings = make_settings(
++        enable_mock_llm=False,
++        llm_provider="deepseek",
++        deepseek_api_key="sk-test",
++        model_input_price_per_million=None,
++        model_output_price_per_million=None,
++    )
++    registry = ProviderRegistry(settings)
++    _, _, has_pricing = registry.resolve("deepseek", settings.deepseek_model)
++    assert has_pricing is False
++
++    provider = registry.create_provider("deepseek", settings.deepseek_model)
++    assert provider.has_pricing is False
++
++
++async def test_mock_determinism_unchanged() -> None:
++    manager = make_manager()
++    created = await manager.create_run(
++        CreateRunRequest(
++            user_idea="Build a deterministic mock product.",
++            provider_id="mock",
++            model_id="mock-default",
++        )
++    )
++    result = await manager.wait_for_completion(created.run_id, wait_seconds=5)
++    assert result.status is RunStatus.COMPLETED
++    await manager.shutdown()
++
++
++async def test_selected_run_pause_resume_cancel_unchanged() -> None:
++    provider = MockLLMProvider(
++        delays_enabled=True,
++        generator_delay=0.001,
++        reviewer_delay=0.03,
++        optimizer_delay=0.001,
++    )
++    manager = make_manager(provider=provider)
++    created = await manager.create_run(
++        CreateRunRequest(
++            user_idea="Build a pausable product.",
++            provider_id="mock",
++            model_id="mock-default",
++        )
++    )
++    await wait_for_status(manager, created.run_id, {RunStatus.REVIEWING})
++    paused = await manager.request_pause(created.run_id)
++    assert paused.status is RunStatus.PAUSE_REQUESTED
++    await wait_for_status(manager, created.run_id, {RunStatus.PAUSED})
++    resumed = await manager.resume_run(
++        created.run_id, ResumeRunRequest(user_override=None)
++    )
++    assert resumed.status is RunStatus.OPTIMIZING
++    cancelled = await manager.cancel_run(created.run_id)
++    assert cancelled.status is RunStatus.CANCELLED
++    await manager.shutdown()
++
++
++async def test_health_response_contract_unchanged() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        health = await client.get("/api/health")
++    assert health.status_code == 200
++    body = health.json()
++    assert body["status"] == "ok"
++    assert isinstance(body["mock_mode"], bool)
++    assert isinstance(body["provider"], str)
++
++
++async def test_get_providers_endpoint_safe_response() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        response = await client.get("/api/providers")
++    assert response.status_code == 200
++    body = response.json()
++    assert "providers" in body
++    assert isinstance(body["providers"], list)
++    for provider in body["providers"]:
++        assert "provider_id" in provider
++        assert "provider_display_name" in provider
++        assert "models" in provider
++        for model in provider["models"]:
++            assert "model_id" in model
++            assert "model_display_name" in model
++            assert "capabilities" in model
++
++
++async def test_create_run_with_explicit_selection_in_request_response() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        created = await client.post(
++            "/api/runs",
++            json=valid_request(provider_id="mock", model_id="mock-default"),
++        )
++        run_id = created.json()["run_id"]
++        snapshot = await client.get(f"/api/runs/{run_id}")
++    assert created.status_code == 202
++    assert snapshot.json()["provider_id"] == "mock"
++    assert snapshot.json()["model_id"] == "mock-default"
++
++
++async def test_create_run_legacy_without_selection_still_accepted() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        created = await client.post("/api/runs", json=valid_request())
++        run_id = created.json()["run_id"]
++        snapshot = await client.get(f"/api/runs/{run_id}")
++    assert created.status_code == 202
++    assert snapshot.json()["provider_id"] is not None
++    assert snapshot.json()["model_id"] is not None
++
++
++async def test_old_run_has_nullable_provider_metadata() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        created = await client.post("/api/runs", json=valid_request())
++        run_id = created.json()["run_id"]
++        await app.state.manager.wait_for_completion(UUID(run_id), wait_seconds=5)
++        # Simulate old snapshot by manually stripping fields in store
++        manager = app.state.manager
++        state = manager.run_store.get_unlocked(UUID(run_id))
++        state.provider_id = None
++        state.provider_display_name = None
++        state.model_id = None
++        state.model_display_name = None
++        await manager.run_store.save_unlocked(UUID(run_id))
++
++        snapshot = await client.get(f"/api/runs/{run_id}")
++    body = snapshot.json()
++    assert body["provider_id"] is None
++    assert body["provider_display_name"] is None
++    assert body["model_id"] is None
++    assert body["model_display_name"] is None
++
++
++async def test_sse_contract_unchanged_with_selection() -> None:
++    app = create_app(
++        settings=make_settings(event_buffer_size=100),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        created = await client.post(
++            "/api/runs",
++            json=valid_request(provider_id="mock", model_id="mock-default"),
++        )
++        run_id = created.json()["run_id"]
++        await app.state.manager.wait_for_completion(UUID(run_id), wait_seconds=5)
++        response = await client.get(f"/api/runs/{run_id}/events?after_sequence=0")
++    assert response.status_code == 200
++    assert response.headers["content-type"].startswith("text/event-stream")
++    assert "event: run_started" in response.text
++    assert "event: run_completed" in response.text
+diff --git a/backend/workflow.py b/backend/workflow.py
+index 471f024..536a671 100644
+--- a/backend/workflow.py
++++ b/backend/workflow.py
+@@ -126,7 +126,7 @@ class AgentWorkflow:
+                         "max_iterations": (
+                             await self.manager.get_run(run_id)
+                         ).max_iterations,
+-                        "mock": self.manager.provider.is_mock,
++                        "mock": self.manager.provider_for(run_id).is_mock,
+                     },
+                 },
+             )
+@@ -303,7 +303,7 @@ class AgentWorkflow:
+                     run_id=run_id,
+                     node="generator",
+                     attempt=attempt + 1,
+-                    provider=type(self.manager.provider).__name__,
++                    provider=type(self.manager.provider_for(run_id)).__name__,
+                 )
+         else:
+             raise RetryableProviderError
+@@ -364,15 +364,19 @@ class AgentWorkflow:
+         attempt: int,
+         record: _AttemptRecord,
+     ) -> tuple[str, TokenUsage]:
+-        iterator = self.manager.provider.stream_prd(
+-            user_idea=state.user_idea,
+-            target_audience=state.target_audience,
+-            user_constraints=state.user_constraints,
+-            iteration=state.current_iteration,
+-            revision_plan=plan,
+-            baseline_prd=self._baseline_prd(state),
+-            output_language=state.output_language,
+-        ).__aiter__()
++        iterator = (
++            self.manager.provider_for(run_id)
++            .stream_prd(
++                user_idea=state.user_idea,
++                target_audience=state.target_audience,
++                user_constraints=state.user_constraints,
++                iteration=state.current_iteration,
++                revision_plan=plan,
++                baseline_prd=self._baseline_prd(state),
++                output_language=state.output_language,
++            )
++            .__aiter__()
++        )
+         content = ""
+         buffer = ""
+         last_flush = monotonic()
+@@ -510,7 +514,7 @@ class AgentWorkflow:
+         state = await self.manager.get_run(run_id)
+ 
+         async def call() -> ProviderStructuredResult:
+-            return await self.manager.provider.generate_review(
++            return await self.manager.provider_for(run_id).generate_review(
+                 role=role,
+                 prd=state.current_prd,
+                 iteration=state.current_iteration,
+@@ -588,7 +592,7 @@ class AgentWorkflow:
+                     node=kind,
+                     role=role,
+                     attempt=attempt + 2,
+-                    provider=type(self.manager.provider).__name__,
++                    provider=type(self.manager.provider_for(run_id)).__name__,
+                 )
+         assert result is not None
+         try:
+@@ -597,7 +601,7 @@ class AgentWorkflow:
+         except ValidationError as exc:
+             repaired = await self._await_provider(
+                 run_id,
+-                self.manager.provider.repair_structured(
++                self.manager.provider_for(run_id).repair_structured(
+                     kind=kind,
+                     raw_value=result.value,
+                     validation_error=str(exc),
+@@ -776,7 +780,7 @@ class AgentWorkflow:
+ 
+         async def call() -> ProviderStructuredResult:
+             assert state.latest_evaluation is not None
+-            return await self.manager.provider.generate_revision_plan(
++            return await self.manager.provider_for(run_id).generate_revision_plan(
+                 evaluation=state.latest_evaluation,
+                 iteration=state.current_iteration,
+                 user_override=state.pending_user_override,
+diff --git a/contracts/v1/create_run_request.json b/contracts/v1/create_run_request.json
+index ae68192..da786bb 100644
+--- a/contracts/v1/create_run_request.json
++++ b/contracts/v1/create_run_request.json
+@@ -3,5 +3,7 @@
+   "target_audience": "Podcast listeners and independent creators",
+   "user_constraints": "Focus on a mobile-first MVP",
+   "quality_threshold": 85,
+-  "max_iterations": 3
++  "max_iterations": 3,
++  "provider_id": "mock",
++  "model_id": "mock-default"
+ }
+diff --git a/contracts/v1/run_snapshot.json b/contracts/v1/run_snapshot.json
+index fc71551..f638b82 100644
+--- a/contracts/v1/run_snapshot.json
++++ b/contracts/v1/run_snapshot.json
+@@ -31,5 +31,9 @@
+   "started_at": null,
+   "completed_at": null,
+   "error": null,
+-  "latest_event_sequence": 0
++  "latest_event_sequence": 0,
++  "provider_id": null,
++  "provider_display_name": null,
++  "model_id": null,
++  "model_display_name": null
+ }
+diff --git a/contracts/v1/terminal_snapshots.json b/contracts/v1/terminal_snapshots.json
+index 47acabf..c30feeb 100644
+--- a/contracts/v1/terminal_snapshots.json
++++ b/contracts/v1/terminal_snapshots.json
+@@ -18,7 +18,11 @@
+     "created_at": "2026-07-26T10:00:00Z",
+     "updated_at": "2026-07-26T10:05:00Z",
+     "completed_at": "2026-07-26T10:05:00Z",
+-    "latest_event_sequence": 20
++    "latest_event_sequence": 20,
++    "provider_id": "mock",
++    "provider_display_name": "Mock Provider",
++    "model_id": "mock-default",
++    "model_display_name": "Mock PRD Model"
+   },
+   {
+     "run_id": "00000000-0000-4000-8000-000000000002",
+@@ -41,7 +45,11 @@
+     "created_at": "2026-07-26T10:00:00Z",
+     "updated_at": "2026-07-26T10:10:00Z",
+     "completed_at": "2026-07-26T10:10:00Z",
+-    "latest_event_sequence": 30
++    "latest_event_sequence": 30,
++    "provider_id": null,
++    "provider_display_name": null,
++    "model_id": null,
++    "model_display_name": null
+   },
+   {
+     "run_id": "00000000-0000-4000-8000-000000000003",
+@@ -62,7 +70,11 @@
+     "created_at": "2026-07-26T10:00:00Z",
+     "updated_at": "2026-07-26T10:01:00Z",
+     "completed_at": "2026-07-26T10:01:00Z",
+-    "latest_event_sequence": 4
++    "latest_event_sequence": 4,
++    "provider_id": null,
++    "provider_display_name": null,
++    "model_id": null,
++    "model_display_name": null
+   },
+   {
+     "run_id": "00000000-0000-4000-8000-000000000004",
+@@ -91,6 +103,10 @@
+       "message": "The generator could not complete.",
+       "retryable": false
+     },
+-    "latest_event_sequence": 5
++    "latest_event_sequence": 5,
++    "provider_id": null,
++    "provider_display_name": null,
++    "model_id": null,
++    "model_display_name": null
+   }
+ ]
+diff --git a/e2e/helpers.ts b/e2e/helpers.ts
+index 146c8e5..ea49fad 100644
+--- a/e2e/helpers.ts
++++ b/e2e/helpers.ts
+@@ -30,6 +30,10 @@ export interface RunSnapshot {
+   }>;
+   node_statuses: Record<string, string>;
+   error: { code: string; message: string } | null;
++  provider_id: string | null;
++  provider_display_name: string | null;
++  model_id: string | null;
++  model_display_name: string | null;
+ }
+ 
+ export interface RunEvent {
+@@ -49,18 +53,68 @@ export async function setScenario(
+   expect((await response.json()).scenario).toBe(scenario);
+ }
+ 
++export async function setCatalogEmpty(
++  request: APIRequestContext,
++): Promise<void> {
++  const response = await request.put(apiUrl("/api/test/catalog-empty"));
++  expect(response.ok()).toBeTruthy();
++}
++
++export async function setCatalogError(
++  request: APIRequestContext,
++): Promise<void> {
++  const response = await request.put(apiUrl("/api/test/catalog-error"));
++  expect(response.ok()).toBeTruthy();
++}
++
++export async function restoreCatalog(
++  request: APIRequestContext,
++): Promise<void> {
++  const response = await request.put(apiUrl("/api/test/catalog-restore"));
++  expect(response.ok()).toBeTruthy();
++}
++
+ export async function startRun(
+   page: Page,
+   options: {
+     idea?: string;
+     threshold?: number;
+     maxIterations?: number;
++    providerId?: string;
++    modelId?: string;
+   } = {},
+ ): Promise<string> {
+   await page.goto("/");
+   await page.getByLabel("产品想法").fill(options.idea ?? PODCAST_IDEA);
+   await page.getByLabel("目标用户").fill("播客听众和独立内容创作者");
+   await page.getByLabel("约束条件").fill("移动端优先、无障碍并保护隐私的 MVP");
++  if (options.providerId || options.modelId) {
++    if (options.providerId) {
++      await page.getByTestId("provider-select").selectOption(options.providerId);
++      await page.waitForTimeout(100);
++    }
++    if (options.modelId) {
++      await page.getByTestId("model-select").selectOption(options.modelId);
++    }
++  } else {
++    // Auto-select the first available provider/model for legacy convenience
++    const providerSelect = page.getByTestId("provider-select");
++    await expect(providerSelect).toBeEnabled();
++    const firstProvider = await providerSelect.evaluate(
++      (el: HTMLSelectElement) => el.options[1]?.value,
++    );
++    if (firstProvider) {
++      await providerSelect.selectOption(firstProvider);
++      const modelSelect = page.getByTestId("model-select");
++      await expect(modelSelect).toBeEnabled();
++      const firstModel = await modelSelect.evaluate(
++        (el: HTMLSelectElement) => el.options[1]?.value,
++      );
++      if (firstModel) {
++        await modelSelect.selectOption(firstModel);
++      }
++    }
++  }
+   if (options.threshold !== undefined || options.maxIterations !== undefined) {
+     await page.getByText("质量设置").click();
+   }
+diff --git a/e2e/provider-selection.spec.ts b/e2e/provider-selection.spec.ts
+new file mode 100644
+index 0000000..9f3045b
+--- /dev/null
++++ b/e2e/provider-selection.spec.ts
+@@ -0,0 +1,120 @@
++import { expect, test } from "@playwright/test";
++
++import {
++  getSnapshot,
++  PODCAST_IDEA,
++  restoreCatalog,
++  setCatalogEmpty,
++  setCatalogError,
++  setScenario,
++  startRun,
++  waitForStatus,
++} from "./helpers";
++
++test.beforeEach(async ({ request }) => {
++  await setScenario(request, "happy");
++});
++
++test.afterEach(async ({ request }) => {
++  await restoreCatalog(request);
++});
++
++test("select provider and model, create run, and observe persisted selection", async ({
++  page,
++  request,
++}) => {
++  const runId = await startRun(page, {
++    providerId: "mock",
++    modelId: "mock-default",
++  });
++  await waitForStatus(page, "已完成");
++
++  const snapshot = await getSnapshot(request, runId);
++  expect(snapshot.provider_id).toBe("mock");
++  expect(snapshot.provider_display_name).toBe("Mock Provider");
++  expect(snapshot.model_id).toBe("mock-default");
++  expect(snapshot.model_display_name).toBe("Mock PRD Model");
++
++  await page.getByTestId("workspace-tab-trace").click();
++  await expect(page.getByText("Mock Provider")).toBeVisible();
++  await expect(page.getByText("Mock PRD Model")).toBeVisible();
++});
++
++test("two concurrent runs keep their own selections", async ({
++  page,
++  request,
++}) => {
++  const firstId = await startRun(page, {
++    idea: `${PODCAST_IDEA} (first)`,
++    providerId: "mock",
++    modelId: "mock-default",
++  });
++  await waitForStatus(page, "已完成");
++
++  await page.getByRole("button", { name: "新建对话" }).click();
++  await expect(
++    page.getByRole("heading", { name: /让每一份需求/ }),
++  ).toBeVisible();
++
++  const secondId = await startRun(page, {
++    idea: `${PODCAST_IDEA} (second)`,
++    providerId: "mock",
++    modelId: "mock-default",
++  });
++  await waitForStatus(page, "已完成");
++
++  const first = await getSnapshot(request, firstId);
++  const second = await getSnapshot(request, secondId);
++  expect(first.provider_id).toBe("mock");
++  expect(second.provider_id).toBe("mock");
++  expect(first.model_id).toBe("mock-default");
++  expect(second.model_id).toBe("mock-default");
++});
++
++test("legacy run navigation still works", async ({ page, request }) => {
++  const runId = await startRun(page);
++  await waitForStatus(page, "已完成");
++
++  const snapshot = await getSnapshot(request, runId);
++  expect(snapshot.provider_id).toBe("mock");
++  expect(snapshot.model_id).toBe("mock-default");
++
++  await page.getByRole("button", { name: "新建对话" }).click();
++  await page
++    .getByRole("button", { name: new RegExp(PODCAST_IDEA) })
++    .first()
++    .click();
++  await expect
++    .poll(() => new URL(page.url()).searchParams.get("run_id"))
++    .toBe(runId);
++  await waitForStatus(page, "已完成");
++});
++
++test("empty catalog blocks creating new runs", async ({ page, request }) => {
++  await setCatalogEmpty(request);
++  await page.goto("/");
++  await expect(
++    page.getByText("当前没有可用的 Provider/Model，无法创建新任务。"),
++  ).toBeVisible();
++  await expect(
++    page.getByRole("button", { name: "开始生成 PRD" }),
++  ).toBeDisabled();
++});
++
++test("failed catalog blocks creating new runs and allows retry", async ({
++  page,
++  request,
++}) => {
++  await setCatalogError(request);
++  await page.goto("/");
++  await expect(
++    page.getByText("加载模型列表失败"),
++  ).toBeVisible();
++  await expect(
++    page.getByRole("button", { name: "开始生成 PRD" }),
++  ).toBeDisabled();
++
++  await restoreCatalog(request);
++  await page.getByRole("button", { name: "重试" }).click();
++  await expect(page.getByTestId("provider-select")).toBeVisible();
++});
+diff --git a/playwright.config.ts b/playwright.config.ts
+index c28aad0..777cdd6 100644
+--- a/playwright.config.ts
++++ b/playwright.config.ts
+@@ -26,7 +26,7 @@ export default defineConfig({
+         webServer: [
+           {
+             command:
+-              ".venv\\Scripts\\python.exe -m uvicorn backend.main:app " +
++              "./.venv/bin/python -m uvicorn backend.main:app " +
+               "--host 127.0.0.1 --port 8011",
+             env: {
+               APP_ENV: "test",
+@@ -46,7 +46,7 @@ export default defineConfig({
+           },
+           {
+             command:
+-              "node node_modules\\astro\\astro.js dev --host 127.0.0.1 --port 4331",
++              "node node_modules/astro/astro.js dev --host 127.0.0.1 --port 4331",
+             env: {
+               ASTRO_TELEMETRY_DISABLED: "1",
+               E2E_TEST_MODE: "true",
+diff --git a/src/components/AgentDashboard.test.tsx b/src/components/AgentDashboard.test.tsx
+index 6ebb8ee..5c1365b 100644
+--- a/src/components/AgentDashboard.test.tsx
++++ b/src/components/AgentDashboard.test.tsx
+@@ -43,6 +43,7 @@ function apiFor(status: RunStatus): AgentApi {
+     resumeRun: vi.fn(),
+     cancelRun: vi.fn(),
+     health: vi.fn(),
++    fetchCatalog: vi.fn().mockResolvedValue({ providers: [] }),
+     eventsUrl: (runId, afterSequence) =>
+       `http://api.test/${runId}?after_sequence=${afterSequence}`,
+   };
+@@ -76,10 +77,33 @@ describe("AgentDashboard state framework", () => {
+ 
+   it("shows an explicit creating state while POST /api/runs is pending", async () => {
+     const api = apiFor("QUEUED");
++    api.fetchCatalog = vi.fn().mockResolvedValue({
++      providers: [
++        {
++          provider_id: "mock",
++          provider_display_name: "Mock",
++          models: [
++            {
++              model_id: "mock-default",
++              model_display_name: "Default",
++              capabilities: null,
++            },
++          ],
++        },
++      ],
++    });
+     api.createRun = vi.fn(() => new Promise<never>(() => undefined));
+     render(
+       <AgentDashboard api={api} eventSourceFactory={eventSourceFactory} />,
+     );
++    await userEvent.selectOptions(
++      await screen.findByLabelText(/模型 Provider/),
++      "mock",
++    );
++    await userEvent.selectOptions(
++      screen.getByLabelText(/^模型$/),
++      "mock-default",
++    );
+     await userEvent.type(
+       screen.getByLabelText(/产品想法/),
+       "A detailed product workflow for independent creators",
+diff --git a/src/components/AgentDashboard.tsx b/src/components/AgentDashboard.tsx
+index 4f0a42b..d9f6d35 100644
+--- a/src/components/AgentDashboard.tsx
++++ b/src/components/AgentDashboard.tsx
+@@ -1,10 +1,12 @@
+ import { AlertCircle, Boxes, RefreshCw } from "lucide-react";
+-import { lazy, Suspense, useState } from "react";
++import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+ 
+ import { useAgentRun, type UseAgentRunOptions } from "../hooks/useAgentRun";
++import { HttpAgentApi } from "../lib/api";
+ import { failureNotice } from "../lib/failureNotice";
+ import { outcomeSummary } from "../lib/outcomeSummary";
+ import type { ConnectionStatus, VersionScore } from "../lib/runReducer";
++import type { CatalogResponse } from "../lib/types";
+ import { isTerminalRunStatus } from "../lib/types";
+ import { AgentTrace } from "./AgentTrace";
+ import { ConversationSidebar } from "./ConversationSidebar";
+@@ -90,6 +92,33 @@ export function AgentDashboard({
+   const snapshot = state.snapshot;
+   const [requestedTab, setRequestedTab] = useState("prd");
+ 
++  const resolvedApi = useMemo(() => api ?? new HttpAgentApi(), [api]);
++
++  const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
++  const [catalogLoading, setCatalogLoading] = useState(false);
++  const [catalogError, setCatalogError] = useState<string | null>(null);
++
++  const loadCatalog = useCallback(async () => {
++    setCatalogLoading(true);
++    setCatalogError(null);
++    try {
++      const data = await resolvedApi.fetchCatalog();
++      setCatalog(data);
++    } catch (error) {
++      setCatalogError(
++        error instanceof Error ? error.message : "无法加载模型列表",
++      );
++    } finally {
++      setCatalogLoading(false);
++    }
++  }, [resolvedApi]);
++
++  useEffect(() => {
++    if (!state.runId && !catalog && !catalogLoading && catalogError === null) {
++      void loadCatalog();
++    }
++  }, [state.runId, catalog, catalogLoading, catalogError, loadCatalog]);
++
+   const versions = Object.keys(state.drafts)
+     .map(Number)
+     .sort((a, b) => a - b);
+@@ -318,7 +347,11 @@ export function AgentDashboard({
+                 </div>
+                 <ProductIdeaForm
+                   isSubmitting={state.isCreating}
++                  catalog={catalog}
++                  isLoadingCatalog={catalogLoading}
++                  catalogError={catalogError}
+                   onSubmit={controller.createRun}
++                  onRetryCatalog={loadCatalog}
+                 />
+               </section>
+             ) : !snapshot || !state.status ? (
+diff --git a/src/components/ProductIdeaForm.tsx b/src/components/ProductIdeaForm.tsx
+index e20b9e2..9f9e702 100644
+--- a/src/components/ProductIdeaForm.tsx
++++ b/src/components/ProductIdeaForm.tsx
+@@ -2,11 +2,16 @@ import { ArrowRight, Sparkles } from "lucide-react";
+ import { useState } from "react";
+ import type { FormEvent } from "react";
+ 
+-import type { CreateRunRequest } from "../lib/types";
++import type { CatalogResponse, CreateRunRequest } from "../lib/types";
++import { ProviderModelSelector } from "./ProviderModelSelector";
+ 
+ interface ProductIdeaFormProps {
+   isSubmitting: boolean;
++  catalog: CatalogResponse | null;
++  isLoadingCatalog: boolean;
++  catalogError: string | null;
+   onSubmit(request: CreateRunRequest): Promise<void>;
++  onRetryCatalog(): void;
+ }
+ 
+ interface FormErrors {
+@@ -17,16 +22,32 @@ interface FormErrors {
+ 
+ export function ProductIdeaForm({
+   isSubmitting,
++  catalog,
++  isLoadingCatalog,
++  catalogError,
+   onSubmit,
++  onRetryCatalog,
+ }: ProductIdeaFormProps) {
+   const [idea, setIdea] = useState("");
+   const [audience, setAudience] = useState("");
+   const [constraints, setConstraints] = useState("");
+   const [qualityThreshold, setQualityThreshold] = useState(85);
+   const [maxIterations, setMaxIterations] = useState(3);
++  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(
++    null,
++  );
++  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
+   const [errors, setErrors] = useState<FormErrors>({});
+   const [submittingLocally, setSubmittingLocally] = useState(false);
+ 
++  const hasValidSelection =
++    selectedProviderId !== null && selectedModelId !== null;
++
++  function handleProviderChange(providerId: string | null) {
++    setSelectedProviderId(providerId);
++    setSelectedModelId(null);
++  }
++
+   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+     event.preventDefault();
+     if (isSubmitting || submittingLocally) {
+@@ -49,6 +70,9 @@ export function ProductIdeaForm({
+     if (Object.keys(nextErrors).length > 0) {
+       return;
+     }
++    if (!hasValidSelection) {
++      return;
++    }
+ 
+     setSubmittingLocally(true);
+     try {
+@@ -58,6 +82,8 @@ export function ProductIdeaForm({
+         user_constraints: constraints.trim() || null,
+         quality_threshold: qualityThreshold,
+         max_iterations: maxIterations,
++        provider_id: selectedProviderId,
++        model_id: selectedModelId,
+       });
+     } finally {
+       setSubmittingLocally(false);
+@@ -65,6 +91,8 @@ export function ProductIdeaForm({
+   }
+ 
+   const busy = isSubmitting || submittingLocally;
++  const canSubmit =
++    !busy && !isLoadingCatalog && catalogError === null && hasValidSelection;
+ 
+   return (
+     <form className="panel" onSubmit={handleSubmit} noValidate>
+@@ -73,6 +101,19 @@ export function ProductIdeaForm({
+         <h2>把想法变成经过评审的 PRD</h2>
+       </div>
+ 
++      <div className="mt-5">
++        <ProviderModelSelector
++          catalog={catalog}
++          isLoading={isLoadingCatalog}
++          error={catalogError}
++          selectedProviderId={selectedProviderId}
++          selectedModelId={selectedModelId}
++          onProviderChange={handleProviderChange}
++          onModelChange={setSelectedModelId}
++          onRetry={onRetryCatalog}
++        />
++      </div>
++
+       <label className="mt-5 block text-sm font-medium text-ink">
+         产品想法
+         <textarea
+@@ -167,7 +208,10 @@ export function ProductIdeaForm({
+       <button
+         className="button-primary mt-5 w-full sm:w-auto"
+         type="submit"
+-        disabled={busy}
++        disabled={!canSubmit}
++        title={
++          !hasValidSelection ? "请先选择 Provider 和 Model" : undefined
++        }
+       >
+         {busy ? "正在创建任务…" : "开始生成 PRD"}
+         {!busy && <ArrowRight aria-hidden="true" size={16} />}
+diff --git a/src/components/ProviderModelSelector.test.tsx b/src/components/ProviderModelSelector.test.tsx
+new file mode 100644
+index 0000000..45a7da0
+--- /dev/null
++++ b/src/components/ProviderModelSelector.test.tsx
+@@ -0,0 +1,138 @@
++import { render, screen } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { describe, expect, it, vi } from "vitest";
++
++import { ProviderModelSelector } from "./ProviderModelSelector";
++
++const MOCK_CATALOG = {
++  providers: [
++    {
++      provider_id: "p1",
++      provider_display_name: "Provider 1",
++      models: [
++        { model_id: "m1a", model_display_name: "Model 1A", capabilities: null },
++        { model_id: "m1b", model_display_name: "Model 1B", capabilities: null },
++      ],
++    },
++    {
++      provider_id: "p2",
++      provider_display_name: "Provider 2",
++      models: [
++        { model_id: "m2a", model_display_name: "Model 2A", capabilities: null },
++      ],
++    },
++  ],
++};
++
++describe("ProviderModelSelector", () => {
++  it("renders loading state", () => {
++    render(
++      <ProviderModelSelector
++        catalog={null}
++        isLoading
++        error={null}
++        selectedProviderId={null}
++        selectedModelId={null}
++        onProviderChange={vi.fn()}
++        onModelChange={vi.fn()}
++        onRetry={vi.fn()}
++      />,
++    );
++    expect(screen.getByText(/正在加载模型列表/)).toBeTruthy();
++  });
++
++  it("renders error state with retry", async () => {
++    const onRetry = vi.fn();
++    render(
++      <ProviderModelSelector
++        catalog={null}
++        isLoading={false}
++        error="network error"
++        selectedProviderId={null}
++        selectedModelId={null}
++        onProviderChange={vi.fn()}
++        onModelChange={vi.fn()}
++        onRetry={onRetry}
++      />,
++    );
++    expect(screen.getByText(/network error/)).toBeTruthy();
++    await userEvent.click(screen.getByRole("button", { name: /重试/ }));
++    expect(onRetry).toHaveBeenCalledOnce();
++  });
++
++  it("renders empty catalog state", () => {
++    render(
++      <ProviderModelSelector
++        catalog={{ providers: [] }}
++        isLoading={false}
++        error={null}
++        selectedProviderId={null}
++        selectedModelId={null}
++        onProviderChange={vi.fn()}
++        onModelChange={vi.fn()}
++        onRetry={vi.fn()}
++      />,
++    );
++    expect(screen.getByText(/没有可用的 Provider\/Model/)).toBeTruthy();
++  });
++
++  it("filters models by selected provider", async () => {
++    render(
++      <ProviderModelSelector
++        catalog={MOCK_CATALOG}
++        isLoading={false}
++        error={null}
++        selectedProviderId="p1"
++        selectedModelId={null}
++        onProviderChange={vi.fn()}
++        onModelChange={vi.fn()}
++        onRetry={vi.fn()}
++      />,
++    );
++    expect(screen.getByRole("option", { name: "Model 1A" })).toBeTruthy();
++    expect(screen.getByRole("option", { name: "Model 1B" })).toBeTruthy();
++    expect(
++      screen.queryByRole("option", { name: "Model 2A" }),
++    ).not.toBeTruthy();
++  });
++
++  it("clears model selection when provider changes", async () => {
++    const onProviderChange = vi.fn();
++    const onModelChange = vi.fn();
++    render(
++      <ProviderModelSelector
++        catalog={MOCK_CATALOG}
++        isLoading={false}
++        error={null}
++        selectedProviderId="p1"
++        selectedModelId="m1a"
++        onProviderChange={onProviderChange}
++        onModelChange={onModelChange}
++        onRetry={vi.fn()}
++      />,
++    );
++    await userEvent.selectOptions(
++      screen.getByLabelText(/Provider/),
++      "p2",
++    );
++    expect(onProviderChange).toHaveBeenCalledWith("p2");
++  });
++
++  it("disables model selector when no provider selected", () => {
++    render(
++      <ProviderModelSelector
++        catalog={MOCK_CATALOG}
++        isLoading={false}
++        error={null}
++        selectedProviderId={null}
++        selectedModelId={null}
++        onProviderChange={vi.fn()}
++        onModelChange={vi.fn()}
++        onRetry={vi.fn()}
++      />,
++    );
++    expect(
++      (screen.getByLabelText(/^模型$/) as HTMLSelectElement).disabled,
++    ).toBe(true);
++  });
++});
+diff --git a/src/components/ProviderModelSelector.tsx b/src/components/ProviderModelSelector.tsx
+new file mode 100644
+index 0000000..f647691
+--- /dev/null
++++ b/src/components/ProviderModelSelector.tsx
+@@ -0,0 +1,114 @@
++import { AlertCircle, Loader2 } from "lucide-react";
++import type { CatalogResponse } from "../lib/types";
++
++interface ProviderModelSelectorProps {
++  catalog: CatalogResponse | null;
++  isLoading: boolean;
++  error: string | null;
++  selectedProviderId: string | null;
++  selectedModelId: string | null;
++  onProviderChange(providerId: string | null): void;
++  onModelChange(modelId: string | null): void;
++  onRetry(): void;
++}
++
++export function ProviderModelSelector({
++  catalog,
++  isLoading,
++  error,
++  selectedProviderId,
++  selectedModelId,
++  onProviderChange,
++  onModelChange,
++  onRetry,
++}: ProviderModelSelectorProps) {
++  if (isLoading) {
++    return (
++      <div className="flex items-center gap-2 text-sm text-ink-muted">
++        <Loader2 aria-hidden="true" size={14} className="animate-spin" />
++        <span>正在加载模型列表…</span>
++      </div>
++    );
++  }
++
++  if (error) {
++    return (
++      <div className="flex flex-col gap-2 rounded-panel border border-line bg-surface px-3 py-2">
++        <div className="flex items-center gap-2 text-sm text-danger">
++          <AlertCircle aria-hidden="true" size={14} />
++          <span>加载模型列表失败：{error}</span>
++        </div>
++        <button
++          type="button"
++          className="self-start text-xs font-medium text-accent underline underline-offset-4"
++          onClick={onRetry}
++        >
++          重试
++        </button>
++      </div>
++    );
++  }
++
++  const providers = catalog?.providers ?? [];
++  if (providers.length === 0) {
++    return (
++      <div className="text-sm text-ink-muted">
++        当前没有可用的 Provider/Model，无法创建新任务。
++      </div>
++    );
++  }
++
++  const selectedProvider = providers.find(
++    (p) => p.provider_id === selectedProviderId,
++  );
++  const availableModels = selectedProvider?.models ?? [];
++
++  return (
++    <div className="grid gap-4 sm:grid-cols-2">
++      <label className="block text-sm font-medium text-ink">
++        模型 Provider
++        <select
++          data-testid="provider-select"
++          className="field mt-2"
++          value={selectedProviderId ?? ""}
++          onChange={(event) => {
++            const value = event.target.value || null;
++            onProviderChange(value);
++          }}
++        >
++          <option value="" disabled>
++            选择 Provider
++          </option>
++          {providers.map((provider) => (
++            <option key={provider.provider_id} value={provider.provider_id}>
++              {provider.provider_display_name}
++            </option>
++          ))}
++        </select>
++      </label>
++
++      <label className="block text-sm font-medium text-ink">
++        模型
++        <select
++          data-testid="model-select"
++          className="field mt-2"
++          value={selectedModelId ?? ""}
++          disabled={!selectedProviderId}
++          onChange={(event) => {
++            const value = event.target.value || null;
++            onModelChange(value);
++          }}
++        >
++          <option value="" disabled>
++            {selectedProviderId ? "选择 Model" : "请先选择 Provider"}
++          </option>
++          {availableModels.map((model) => (
++            <option key={model.model_id} value={model.model_id}>
++              {model.model_display_name}
++            </option>
++          ))}
++        </select>
++      </label>
++    </div>
++  );
++}
+diff --git a/src/components/TelemetryPanel.test.tsx b/src/components/TelemetryPanel.test.tsx
+new file mode 100644
+index 0000000..a53f211
+--- /dev/null
++++ b/src/components/TelemetryPanel.test.tsx
+@@ -0,0 +1,30 @@
++import { render, screen } from "@testing-library/react";
++import { describe, expect, it } from "vitest";
++
++import { makeSnapshot } from "../test/fixtures";
++import { TelemetryPanel } from "./TelemetryPanel";
++
++describe("TelemetryPanel provider/model metadata", () => {
++  it("shows persisted provider and model display names", () => {
++    const snapshot = makeSnapshot({
++      provider_id: "mock",
++      provider_display_name: "Mock Provider",
++      model_id: "mock-default",
++      model_display_name: "Mock PRD Model",
++    });
++    render(<TelemetryPanel snapshot={snapshot} />);
++    expect(screen.getByText("Mock Provider")).toBeTruthy();
++    expect(screen.getByText("Mock PRD Model")).toBeTruthy();
++  });
++
++  it("safely renders legacy run without provider metadata", () => {
++    const snapshot = makeSnapshot({
++      provider_id: null,
++      provider_display_name: null,
++      model_id: null,
++      model_display_name: null,
++    });
++    render(<TelemetryPanel snapshot={snapshot} />);
++    expect(screen.getAllByText("未知").length).toBeGreaterThanOrEqual(2);
++  });
++});
+diff --git a/src/components/TelemetryPanel.tsx b/src/components/TelemetryPanel.tsx
+index 7d95479..16b5e54 100644
+--- a/src/components/TelemetryPanel.tsx
++++ b/src/components/TelemetryPanel.tsx
+@@ -17,7 +17,21 @@ function formatElapsed(seconds: number): string {
+ export function TelemetryPanel({ snapshot }: { snapshot: RunSnapshot }) {
+   const timings = nodeTimingRows(snapshot.node_timings);
+   const slowest = slowestSeconds(timings);
++  const providerLabel =
++    snapshot.provider_display_name ?? snapshot.provider_id ?? "未知";
++  const modelLabel =
++    snapshot.model_display_name ?? snapshot.model_id ?? "未知";
+   const metrics = [
++    {
++      label: "Provider",
++      value: providerLabel,
++      icon: Gauge,
++    },
++    {
++      label: "Model",
++      value: modelLabel,
++      icon: Cpu,
++    },
+     {
+       label: "迭代进度",
+       value: `${snapshot.current_iteration}/${snapshot.max_iterations}`,
+diff --git a/src/components/components.test.tsx b/src/components/components.test.tsx
+index d002a94..788c0f9 100644
+--- a/src/components/components.test.tsx
++++ b/src/components/components.test.tsx
+@@ -29,7 +29,36 @@ describe("ProductIdeaForm", () => {
+   it("blocks invalid input and shows the boundary message", async () => {
+     const submit = vi.fn().mockResolvedValue(undefined);
+     const { container } = render(
+-      <ProductIdeaForm isSubmitting={false} onSubmit={submit} />,
++      <ProductIdeaForm
++        isSubmitting={false}
++        onSubmit={submit}
++        catalog={{
++          providers: [
++            {
++              provider_id: "mock",
++              provider_display_name: "Mock",
++              models: [
++                {
++                  model_id: "mock-default",
++                  model_display_name: "Default",
++                  capabilities: null,
++                },
++              ],
++            },
++          ],
++        }}
++        isLoadingCatalog={false}
++        catalogError={null}
++        onRetryCatalog={vi.fn()}
++      />,
++    );
++    await userEvent.selectOptions(
++      screen.getByLabelText(/模型 Provider/),
++      "mock",
++    );
++    await userEvent.selectOptions(
++      screen.getByLabelText(/^模型$/),
++      "mock-default",
+     );
+     await userEvent.click(
+       screen.getByRole("button", { name: /开始生成 PRD/i }),
+@@ -47,7 +76,38 @@ describe("ProductIdeaForm", () => {
+           release = resolve;
+         }),
+     );
+-    render(<ProductIdeaForm isSubmitting={false} onSubmit={submit} />);
++    render(
++      <ProductIdeaForm
++        isSubmitting={false}
++        onSubmit={submit}
++        catalog={{
++          providers: [
++            {
++              provider_id: "mock",
++              provider_display_name: "Mock",
++              models: [
++                {
++                  model_id: "mock-default",
++                  model_display_name: "Default",
++                  capabilities: null,
++                },
++              ],
++            },
++          ],
++        }}
++        isLoadingCatalog={false}
++        catalogError={null}
++        onRetryCatalog={vi.fn()}
++      />,
++    );
++    await userEvent.selectOptions(
++      screen.getByLabelText(/模型 Provider/),
++      "mock",
++    );
++    await userEvent.selectOptions(
++      screen.getByLabelText(/^模型$/),
++      "mock-default",
++    );
+     await userEvent.type(
+       screen.getByLabelText(/产品想法/),
+       "A detailed podcast subscription experience",
+diff --git a/src/hooks/useAgentRun.test.tsx b/src/hooks/useAgentRun.test.tsx
+index 97835b3..6b5716b 100644
+--- a/src/hooks/useAgentRun.test.tsx
++++ b/src/hooks/useAgentRun.test.tsx
+@@ -84,6 +84,7 @@ class FakeApi implements AgentApi {
+     >();
+   cancelRun = vi.fn<(runId: string) => Promise<ControlResponse>>();
+   health = vi.fn<() => Promise<HealthResponse>>();
++  fetchCatalog = vi.fn<() => Promise<{ providers: [] }>>();
+ 
+   eventsUrl(runId: string, afterSequence: number): string {
+     return `http://api.test/api/runs/${runId}/events?after_sequence=${afterSequence}`;
+diff --git a/src/lib/api.ts b/src/lib/api.ts
+index 3f050ce..6bf1151 100644
+--- a/src/lib/api.ts
++++ b/src/lib/api.ts
+@@ -6,6 +6,7 @@ import {
+ } from "./contracts";
+ import { resolvePublicApiBaseUrl } from "./config";
+ import type {
++  CatalogResponse,
+   ControlResponse,
+   CreateRunRequest,
+   CreateRunResponse,
+@@ -41,6 +42,7 @@ export interface AgentApi {
+   resumeRun(runId: string, request: ResumeRunRequest): Promise<ControlResponse>;
+   cancelRun(runId: string): Promise<ControlResponse>;
+   health(): Promise<HealthResponse>;
++  fetchCatalog(): Promise<CatalogResponse>;
+   eventsUrl(runId: string, afterSequence: number): string;
+ }
+ 
+@@ -89,6 +91,32 @@ function parseHealthResponse(value: unknown): HealthResponse {
+   return value as unknown as HealthResponse;
+ }
+ 
++function parseCatalogResponse(value: unknown): CatalogResponse {
++  if (!isRecord(value) || !Array.isArray(value.providers)) {
++    throw new TypeError("Invalid catalog response");
++  }
++  for (const provider of value.providers) {
++    if (
++      !isRecord(provider) ||
++      typeof provider.provider_id !== "string" ||
++      typeof provider.provider_display_name !== "string" ||
++      !Array.isArray(provider.models)
++    ) {
++      throw new TypeError("Invalid provider in catalog");
++    }
++    for (const model of provider.models) {
++      if (
++        !isRecord(model) ||
++        typeof model.model_id !== "string" ||
++        typeof model.model_display_name !== "string"
++      ) {
++        throw new TypeError("Invalid model in catalog");
++      }
++    }
++  }
++  return value as unknown as CatalogResponse;
++}
++
+ export class HttpAgentApi implements AgentApi {
+   readonly baseUrl: string;
+ 
+@@ -157,6 +185,10 @@ export class HttpAgentApi implements AgentApi {
+     return this.request("/api/health", undefined, parseHealthResponse);
+   }
+ 
++  fetchCatalog(): Promise<CatalogResponse> {
++    return this.request("/api/providers", undefined, parseCatalogResponse);
++  }
++
+   eventsUrl(runId: string, afterSequence: number): string {
+     const url = new URL(
+       `/api/runs/${encodeURIComponent(runId)}/events`,
+diff --git a/src/lib/contracts.test.ts b/src/lib/contracts.test.ts
+index 77259a2..e65e56a 100644
+--- a/src/lib/contracts.test.ts
++++ b/src/lib/contracts.test.ts
+@@ -20,8 +20,18 @@ import {
+ 
+ describe("versioned API contracts", () => {
+   it("parses the backend-validated examples", () => {
+-    expect(parseCreateRunRequest(createRunRequest).max_iterations).toBe(3);
+-    expect(parseRunSnapshot(runSnapshot).status).toBe("QUEUED");
++    const request = parseCreateRunRequest(createRunRequest);
++    expect(request.max_iterations).toBe(3);
++    expect(request.provider_id).toBe("mock");
++    expect(request.model_id).toBe("mock-default");
++
++    const snapshot = parseRunSnapshot(runSnapshot);
++    expect(snapshot.status).toBe("QUEUED");
++    expect(snapshot.provider_id).toBeNull();
++    expect(snapshot.provider_display_name).toBeNull();
++    expect(snapshot.model_id).toBeNull();
++    expect(snapshot.model_display_name).toBeNull();
++
+     expect(parseRunEvent(runEvent).event).toBe("status_changed");
+     expect(parseErrorResponse(errorResponse).error.code).toBe("RUN_NOT_FOUND");
+   });
+@@ -41,6 +51,17 @@ describe("versioned API contracts", () => {
+     expect(isTerminalRunStatus("GENERATING")).toBe(false);
+   });
+ 
++  it("parses persisted provider/model metadata on new runs", () => {
++    const completed = terminalSnapshots.find(
++      (snapshot) => snapshot.status === "COMPLETED",
++    )!;
++    const parsed = parseRunSnapshot(completed);
++    expect(parsed.provider_id).toBe("mock");
++    expect(parsed.provider_display_name).toBe("Mock Provider");
++    expect(parsed.model_id).toBe("mock-default");
++    expect(parsed.model_display_name).toBe("Mock PRD Model");
++  });
++
+   it("treats the streaming attempt as optional for older servers", () => {
+     expect(parseRunSnapshot(runSnapshot).current_prd_attempt).toBe(1);
+     const failed = terminalSnapshots.find(
+diff --git a/src/lib/types.ts b/src/lib/types.ts
+index 69f9f78..655abb3 100644
+--- a/src/lib/types.ts
++++ b/src/lib/types.ts
+@@ -69,6 +69,8 @@ export interface CreateRunRequest {
+   user_constraints?: string | null;
+   quality_threshold: number;
+   max_iterations: number;
++  provider_id?: string | null;
++  model_id?: string | null;
+ }
+ 
+ export interface ResumeRunRequest {
+@@ -199,6 +201,10 @@ export interface RunSnapshot {
+   completed_at?: string | null;
+   error?: RunError | null;
+   latest_event_sequence: number;
++  provider_id?: string | null;
++  provider_display_name?: string | null;
++  model_id?: string | null;
++  model_display_name?: string | null;
+ }
+ 
+ export interface RunSummary {
+@@ -212,6 +218,10 @@ export interface RunSummary {
+   best_score?: number | null;
+   created_at: string;
+   updated_at: string;
++  provider_id?: string | null;
++  provider_display_name?: string | null;
++  model_id?: string | null;
++  model_display_name?: string | null;
+ }
+ 
+ export interface RunListResponse {
+@@ -219,6 +229,22 @@ export interface RunListResponse {
+   total: number;
+ }
+ 
++export interface ModelInfo {
++  model_id: string;
++  model_display_name: string;
++  capabilities: Record<string, unknown> | null;
++}
++
++export interface ProviderInfo {
++  provider_id: string;
++  provider_display_name: string;
++  models: ModelInfo[];
++}
++
++export interface CatalogResponse {
++  providers: ProviderInfo[];
++}
++
+ export interface RunEvent<
+   TPayload extends Record<string, unknown> = Record<string, unknown>,
+ > {

@@ -1,104 +1,104 @@
-# Round 2 Implementation Prompt
+# Round 2 实现任务 Prompt
 
-You are in the `Agentic-PRD-Architect` repository for Round 2 of an AI Coding benchmark.
+你当前位于 `Agentic-PRD-Architect` 仓库中，正在执行 AI Coding Benchmark 的 Round 2。
 
-Your task is to implement the canonical specification reproduced below.
+你的任务是实现下方完整给出的 canonical specification（规范基准）。
 
-Rules for this run:
+本次运行规则：
 
-- Start from the repository state provided to you. It has been prepared at `ai-coding-benchmark-v1` / `0edc069`.
-- First read and obey the repository's own `AGENTS.md` and other relevant baseline documentation, then inspect the real code as needed.
-- Implement the feature completely, including the tests required by the canonical specification.
-- You may edit source code and tests and run relevant development/test commands.
-- Do not inspect outputs, branches, worktrees, transcripts, reports, or implementations from other benchmark systems.
-- Do not rely on or reconstruct your own Round 1 proposal. The canonical specification below is authoritative.
-- Do not modify benchmark prompts, specs, raw-output records, metrics, or evaluation artifacts.
-- Avoid unrelated refactors and dependency changes.
-- Do not create a Git commit.
-- Make a best-effort autonomous implementation. Do not stop to ask for design choices that the canonical specification already resolves; for implementation details it intentionally leaves open, make a reasonable repository-consistent choice and continue.
-- Before finishing, run the relevant repository test/static/type/build checks you can execute and repair failures autonomously when possible.
-- In your final response, report: implementation summary, tests/checks actually run and their results, and any unresolved limitation or blocker. Do not claim a test passed unless you actually ran it.
+- 从已提供给你的仓库状态开始。该仓库已准备在 `ai-coding-benchmark-v1` / `0edc069`。
+- 首先阅读并遵守仓库自身的 `AGENTS.md` 以及其他相关 baseline 文档，然后根据需要检查真实代码。
+- 完整实现该功能，包括 canonical specification 要求的测试。
+- 你可以修改源代码和测试，并运行相关开发/测试命令。
+- 不得查看其他 benchmark 系统的输出、分支、worktree、transcript、报告或实现。
+- 不得依赖或重建你自己在 Round 1 中提出的方案。以下 canonical specification 是本轮实现的唯一权威依据。
+- 不得修改 benchmark prompts、specs、raw-output records、metrics 或其他 evaluation artifacts。
+- 避免与本需求无关的重构和依赖变更。
+- 不要创建 Git commit。
+- 尽最大努力自主完成实现。不要因为 canonical specification 已经明确回答的设计选择而停下来询问；对于规范有意留白的实现细节，请做出符合当前仓库惯例的合理选择并继续。
+- 在完成之前，运行你能够执行的、与本仓库相关的 test/static/type/build 检查，并在可能的情况下自主修复失败。
+- 最终回答请使用中文，并报告：实现摘要、实际运行过的测试/检查及其结果、以及任何仍未解决的限制或 blocker。除非你实际运行过某项测试，否则不要声称它已通过。
 
-Begin implementation now.
+现在开始实现。
 
 ---
 
-# Round 2 Canonical Specification — Run-level Provider / Model Selection
+# Round 2 Canonical Specification — Run 级 Provider / Model 选择
 
-Status: **Frozen for Round 2**
-Benchmark baseline: `ai-coding-benchmark-v1` / `0edc069`
-Task type: implementation + testing
+状态：**Round 2 已冻结（Frozen for Round 2）**  
+Benchmark baseline：`ai-coding-benchmark-v1` / `0edc069`  
+任务类型：实现 + 测试
 
-## 1. Purpose
+## 1. 目的
 
-Implement **Run-level Provider / Model Selection** in Agentic-PRD-Architect.
+在 Agentic-PRD-Architect 中实现 **Run 级 Provider / Model 选择（Run-level Provider / Model Selection）**。
 
-A user creating a new Run must be able to select one allowed Provider and one allowed Model for that Run. The available choices are controlled by the backend. The resolved selection is immutable for the lifetime of the Run, persists with the Run, is visible in safe Run/Telemetry metadata, and must never leak backend credentials or internal connection details.
+用户创建新 Run 时，必须能够为该 Run 选择一个允许使用的 Provider 和一个允许使用的 Model。可选项由后端控制。解析后的选择在该 Run 整个生命周期内不可变，需要随 Run 持久化，并且能够在安全的 Run/Telemetry 元数据中查看，同时绝不能泄露后端凭据或内部连接信息。
 
-This specification is authoritative for Round 2. Round 1 proposals are not implementation instructions. Where Round 1 agents disagreed, all Round 2 systems must follow this document instead of their own prior plan.
+本规范是 Round 2 的权威依据。Round 1 中各 Agent 提出的方案不是本轮实现指令。如果 Round 1 的方案之间存在分歧，所有 Round 2 系统都必须遵循本文档，而不是遵循自己此前的方案。
 
-## 2. Baseline and implementation constraints
+## 2. Baseline 与实现约束
 
-The implementation MUST:
+实现必须：
 
-- start from Git tag `ai-coding-benchmark-v1`, commit `0edc069`;
-- preserve existing repository conventions and contracts unless this specification explicitly changes them;
-- avoid unrelated refactors;
-- avoid dependency additions/upgrades unless the baseline is genuinely incapable of implementing the feature without them;
-- preserve the existing core Agent pipeline and execution semantics;
-- preserve existing REST control, SSE streaming, Pause, Resume, and Cancel behavior;
-- preserve SQLite as the source of truth;
-- preserve deterministic Mock and Scenario Mock behavior;
-- keep all credentials and private Provider configuration on the backend.
+- 从 Git tag `ai-coding-benchmark-v1`、commit `0edc069` 开始；
+- 除非本规范明确要求改变，否则保留现有仓库惯例和契约；
+- 避免无关重构；
+- 除非 baseline 确实无法在不增加/升级依赖的情况下实现该功能，否则避免新增或升级依赖；
+- 保留现有核心 Agent pipeline 和执行语义；
+- 保留现有 REST 控制、SSE streaming、Pause、Resume、Cancel 行为；
+- 保留 SQLite 作为 source of truth；
+- 保留确定性的 Mock 和 Scenario Mock 行为；
+- 所有凭据和私有 Provider 配置都必须仅保留在后端。
 
-The following core behavior MUST NOT be redesigned as part of this task:
+本任务中不得重新设计以下核心行为：
 
-- Generator → three independent Reviewers → Aggregator → Optimizer;
-- parallel Reviewer execution;
-- deterministic Aggregator behavior;
-- quality-gate behavior;
-- existing Run lifecycle semantics unrelated to Provider/Model selection.
+- Generator → 三个独立 Reviewer → Aggregator → Optimizer；
+- Reviewer 并行执行；
+- 确定性的 Aggregator 行为；
+- quality-gate 行为；
+- 与 Provider/Model 选择无关的既有 Run 生命周期语义。
 
-Existing contract constraints that MUST remain stable unless strictly required by this feature:
+除非该功能严格要求，否则以下现有契约约束必须保持稳定：
 
-- the existing `HealthResponse` field shape and semantics;
-- the existing `RunEventType` set — do not add a new event type solely for Provider/Model selection.
+- 现有 `HealthResponse` 的字段形状和语义；
+- 现有 `RunEventType` 集合——不要仅为了表示 Provider/Model 选择而新增事件类型。
 
-## 3. Canonical terminology
+## 3. 规范术语
 
 ### Provider
 
-A backend-configured model Provider. It has:
+由后端配置的模型 Provider。它具有：
 
-- a stable `provider_id` used by APIs and persistence;
-- a safe `provider_display_name` shown to users;
-- backend-only execution configuration such as credentials and Base URL;
-- one or more allowed Models.
+- 用于 API 和持久化的稳定 `provider_id`；
+- 展示给用户的安全 `provider_display_name`；
+- 仅后端可见的执行配置，例如凭据和 Base URL；
+- 一个或多个允许使用的 Model。
 
 ### Model
 
-A selectable model under a Provider. It has:
+某个 Provider 下可选择的模型。它具有：
 
-- a stable `model_id` used by APIs and persistence;
-- a safe `model_display_name` shown to users;
-- optional safe capability metadata;
-- optional backend-only model-specific pricing metadata.
+- 用于 API 和持久化的稳定 `model_id`；
+- 展示给用户的安全 `model_display_name`；
+- 可选的安全 capability 元数据；
+- 可选的、仅后端可见的 model-specific pricing 元数据。
 
-`model_id` only needs to be unique within its Provider. The canonical identity of a selection is the pair `provider_id + model_id`.
+`model_id` 只需要在所属 Provider 内唯一。一次选择的规范身份是 `provider_id + model_id` 这一对值。
 
 ### Run selection
 
-The immutable Provider/Model pair resolved when a new Run is created.
+创建新 Run 时解析并确定的、不可变的 Provider/Model 组合。
 
-## 4. Backend-controlled safe catalog
+## 4. 后端控制的安全 catalog
 
-The backend MUST expose a read-only catalog of currently selectable Providers and Models.
+后端必须暴露一个只读 catalog，包含当前可选择的 Providers 和 Models。
 
-Use the repository's existing API prefix/routing convention and add a catalog endpoint at relative path:
+使用仓库现有 API prefix/routing 约定，并新增相对路径为以下地址的 catalog endpoint：
 
 `GET /providers`
 
-The response MUST be structurally equivalent to:
+响应在结构上必须等价于：
 
 ```json
 {
@@ -118,330 +118,330 @@ The response MUST be structurally equivalent to:
 }
 ```
 
-Requirements:
+要求：
 
-- The catalog MUST be generated from backend-controlled configuration/registry data, not from frontend constants.
-- Only entries that are valid selectable choices for a new Run may appear.
-- The frontend MUST NOT be able to add or override a Provider, Model, credential, Base URL, header, or other private execution setting.
-- The response MUST NOT contain API keys, tokens, secrets, private Base URLs, auth headers, raw environment values, arbitrary backend configuration passthrough, or actual model pricing values.
-- `capabilities` may be `null` or contain only safe public metadata.
-- Model pricing configuration remains backend-only. The frontend may display the Run's computed Telemetry cost, but it must not receive the configured per-token/per-million model price table through this catalog.
-- A valid but empty catalog returns an empty `providers` array.
-- A catalog configuration/loading failure MUST be surfaced as an error rather than converted into a fabricated/default catalog.
+- catalog 必须由后端控制的 configuration/registry 数据生成，而不是由前端常量生成。
+- 只有对新 Run 而言有效且当前可选择的条目才可以出现在 catalog 中。
+- 前端绝不能增加或覆盖 Provider、Model、credential、Base URL、header 或其他私有执行设置。
+- 响应绝不能包含 API keys、tokens、secrets、私有 Base URLs、auth headers、原始环境变量值、任意后端配置透传内容或真实 model pricing 数值。
+- `capabilities` 可以为 `null`，也可以只包含安全的公开元数据。
+- Model pricing 配置仍然仅保留在后端。前端可以展示某个 Run 计算出的 Telemetry cost，但不能通过该 catalog 获得按 token/按 million 配置的 model price table。
+- 合法但为空的 catalog 返回空的 `providers` 数组。
+- catalog 配置/加载失败必须作为错误暴露，不能被转换成伪造的/default catalog。
 
-The implementation MAY choose its internal config schema, registry classes, factories, and dependency-injection pattern, provided the externally observable behavior above is preserved.
+只要保持上述外部可观察行为，实现可以自行选择内部 config schema、registry class、factory 和 dependency-injection 模式。
 
-## 5. Create Run API semantics
+## 5. Create Run API 语义
 
-Extend the existing Create Run request without renaming or replacing the existing Create Run endpoint.
+扩展现有 Create Run request，不得重命名或替换现有 Create Run endpoint。
 
-The request accepts two new fields:
+request 新增两个字段：
 
 - `provider_id`
 - `model_id`
 
-### 5.1 Explicit selection
+### 5.1 显式选择
 
-For the new frontend flow, both fields MUST be sent together.
+新的前端流程中，这两个字段必须一起发送。
 
-When both are present, the backend MUST verify that:
+当两个字段同时存在时，后端必须验证：
 
-1. `provider_id` exists in the current backend catalog;
-2. `model_id` exists under that exact Provider;
-3. the pair is currently selectable/available.
+1. `provider_id` 存在于当前后端 catalog 中；
+2. `model_id` 存在于该指定 Provider 下；
+3. 该组合当前可选择/可用。
 
-If any check fails:
+任何检查失败时：
 
-- Run creation MUST fail with a clear 4xx error using the repository's existing error-envelope conventions;
-- no Run may be created or partially persisted;
-- no Provider or Model may be substituted;
-- no retry may silently change the selection.
+- Run 创建必须失败，并使用仓库现有 error-envelope 约定返回清晰的 4xx 错误；
+- 不得创建或部分持久化任何 Run；
+- 不得替换 Provider 或 Model；
+- 任何 retry 都不得静默改变该选择。
 
-A request containing only one of `provider_id` or `model_id` MUST fail validation.
+只包含 `provider_id` 或 `model_id` 其中一个字段的 request 必须校验失败。
 
-### 5.2 Legacy Create Run compatibility
+### 5.2 旧版 Create Run 兼容性
 
-A request containing neither field is a legacy request and MUST remain accepted.
+如果 request 两个字段都不包含，则视为 legacy request，并且必须继续被接受。
 
-For this legacy path only:
+仅对于该 legacy 路径：
 
-- preserve the baseline's existing default Provider/Model resolution behavior;
-- resolve that default to a concrete Provider/Model pair before execution;
-- persist the resolved pair on every newly created Run;
-- if the legacy default cannot be resolved to a valid available pair, fail explicitly rather than starting a Run with an unknown or silently substituted model.
+- 保留 baseline 现有的默认 Provider/Model 解析行为；
+- 在执行前，将该默认值解析为具体的 Provider/Model 组合；
+- 对每个新创建的 Run 持久化解析后的组合；
+- 如果 legacy default 无法解析为一个有效、可用的组合，则必须明确失败，不得以未知模型或静默替换后的模型启动 Run。
 
-The legacy compatibility path is not permission to fall back when an explicit pair was supplied.
+legacy 兼容路径不代表显式提供组合时允许 fallback。
 
-### 5.3 Response compatibility
+### 5.3 Response 兼容性
 
-Existing response fields and meanings MUST remain compatible. New safe Provider/Model metadata may be added in a backward-compatible way.
+现有 response 字段及其含义必须保持兼容。可以以向后兼容的方式新增安全的 Provider/Model 元数据。
 
-## 6. Run-scoped binding and concurrency isolation
+## 6. Run 级绑定与并发隔离
 
-Provider/Model execution configuration MUST be bound to the Run, not to mutable global "current Provider/current Model" state.
+Provider/Model 执行配置必须绑定到 Run，而不是绑定到可变的全局“current Provider/current Model”状态。
 
-For a newly created Run:
+对于一个新创建的 Run：
 
-- resolve `provider_id + model_id` once at creation/start;
-- bind the resulting backend execution configuration to that Run;
-- keep the selection immutable for the rest of that Run;
-- every Generator/Reviewer/Optimizer model call belonging to that Run MUST use that Run's bound selection.
+- 在创建/启动时只解析一次 `provider_id + model_id`；
+- 将解析得到的后端执行配置绑定到该 Run；
+- 在该 Run 剩余生命周期内保持选择不可变；
+- 属于该 Run 的每一次 Generator/Reviewer/Optimizer 模型调用都必须使用该 Run 绑定的选择。
 
-The implementation MUST support two or more concurrent Runs using different Provider/Model pairs without cross-talk.
+实现必须支持两个或更多并发 Run 使用不同 Provider/Model 组合，且彼此之间不能发生 cross-talk。
 
-Changing, creating, pausing, resuming, or cancelling one Run MUST NOT mutate the Provider/Model selection of another Run.
+修改、创建、暂停、恢复或取消一个 Run，都不得改变另一个 Run 的 Provider/Model 选择。
 
-A shared read-only catalog/registry is allowed. A shared mutable selected Provider/Model is not.
+允许共享只读 catalog/registry。不允许共享可变的 selected Provider/Model 状态。
 
-## 7. Persistence and old SQLite compatibility
+## 7. 持久化与旧 SQLite 兼容性
 
-No SQL DDL migration is allowed for Round 2.
+Round 2 不允许 SQL DDL migration。
 
-The Run's serialized snapshot/payload stored through the existing SQLite persistence path MUST gain nullable fields equivalent to:
-
-- `provider_id`
-- `provider_display_name`
-- `model_id`
-- `model_display_name`
-
-Requirements:
-
-- Every new Run created after Round 2 implementation MUST persist all four resolved values.
-- The display names MUST be snapshots of the names at Run creation time, not dynamically re-derived from the current catalog when old Runs are displayed.
-- Service restart or page refresh MUST NOT lose the stored selection metadata.
-- Existing SQLite databases and existing Run rows created before Round 2 MUST remain readable without schema migration.
-- When an old snapshot lacks these fields, deserialize them as `null`/missing-compatible values; do not invent historical values.
-- Existing APIs/UI MUST not crash when reading an old Run with no stored selection.
-
-If an old pre-Round-2 Run with no persisted selection must perform additional model execution, preserve the baseline legacy Provider resolution behavior for that old Run. This compatibility behavior MUST NOT be used for new Runs or explicit selections.
-
-## 8. Rehydration and unavailable historical selections
-
-When a persisted new-format Run contains a Provider/Model selection, any execution path that needs to reconstruct Provider access MUST use the persisted IDs.
-
-If the persisted explicit selection is no longer available in backend configuration:
-
-- fail that model-execution operation clearly;
-- do not switch to another Provider/Model;
-- preserve the historical IDs/display names for inspection.
-
-The system MUST distinguish "historical metadata is readable" from "the historical Provider/Model is currently executable".
-
-## 9. Telemetry, Run information, and contract preservation
-
-Safe Run/Telemetry information MUST make the Run's selected model inspectable.
-
-For new Runs, expose at least:
+通过现有 SQLite 持久化路径存储的 Run serialized snapshot/payload 必须新增等价于以下内容的 nullable 字段：
 
 - `provider_id`
 - `provider_display_name`
 - `model_id`
 - `model_display_name`
 
-The values MUST come from the Run snapshot, not from a mutable current catalog lookup.
+要求：
 
-For old Runs, these fields may be `null` or represented by a non-fabricated legacy/unknown UI state.
+- Round 2 实现后创建的每个新 Run 都必须持久化上述四个已解析值。
+- display name 必须是 Run 创建时的名称快照，而不是在展示旧 Run 时从当前 catalog 动态重新解析。
+- service restart 或 page refresh 后，已存储的 selection metadata 不得丢失。
+- Round 2 之前创建的既有 SQLite database 和既有 Run row 必须无需 schema migration 即可继续读取。
+- 当旧 snapshot 缺少这些字段时，将其反序列化为 `null`/missing-compatible 值；不得伪造历史值。
+- 读取不包含 selection metadata 的旧 Run 时，既有 API/UI 不得崩溃。
 
-Telemetry, Run APIs, SSE payloads, logs returned to the frontend, and error payloads MUST NOT expose:
+如果一个 Round 2 之前创建、且没有持久化 selection 的旧 Run 必须继续进行额外模型执行，则保留 baseline 的 legacy Provider 解析行为。此兼容行为不得用于新 Run 或显式选择。
 
-- API keys;
-- bearer tokens;
-- auth headers;
-- private/internal Base URLs;
-- secret environment variables;
-- raw backend Provider config objects.
+## 8. Rehydration 与历史 selection 不再可用时的行为
 
-This task does not require adding Provider/Model metadata to every individual SSE event if existing Run-level Telemetry already provides a stable place to expose it.
+当一个持久化的新格式 Run 包含 Provider/Model selection 时，任何需要重建 Provider access 的执行路径都必须使用已持久化的 IDs。
 
-Contract preservation rules:
+如果持久化的显式 selection 已经不再存在于后端配置中：
 
-- Keep the existing `HealthResponse` shape and semantics unchanged.
-- Do not add a new `RunEventType` solely to represent Provider/Model selection.
-- Prefer persisted Run/Telemetry metadata for exposing the selected Provider/Model.
+- 该模型执行操作必须明确失败；
+- 不得切换到其他 Provider/Model；
+- 必须保留历史 IDs/display names 供查看。
 
-## 10. Per-model pricing semantics
+系统必须区分“历史元数据仍然可读”和“该历史 Provider/Model 当前仍可执行”这两个概念。
 
-Any pricing/cost logic affected by this feature MUST be model-scoped.
+## 9. Telemetry、Run 信息与契约保持
 
-Requirements:
+安全的 Run/Telemetry 信息必须让用户可以查看该 Run 选择的模型。
 
-- pricing belongs to a specific Model, not merely to a Provider or one global default;
-- pricing configuration remains backend-only;
-- if a cost estimate is computed, it MUST use the selected Run's Model pricing;
-- pricing from a different Model MUST never be used as fallback;
-- if pricing for the selected Model is not configured/known, the resulting cost/price value MUST be `null`/unknown, not `0`, and not a guessed value;
-- an explicitly configured zero price remains distinct from missing pricing;
-- missing pricing MUST NOT prevent the Run itself from executing unless the baseline already requires pricing for execution.
+对于新 Run，至少暴露：
 
-Do not invent a new pricing unit/currency schema if the baseline already has one. Preserve existing pricing units and public Telemetry contract where possible while changing lookup semantics to be per-model.
+- `provider_id`
+- `provider_display_name`
+- `model_id`
+- `model_display_name`
 
-## 11. Frontend behavior
+这些值必须来自 Run snapshot，而不是来自可变的当前 catalog lookup。
 
-The new Create Run UI MUST obtain all Provider/Model choices from the backend catalog.
+对于旧 Run，这些字段可以为 `null`，也可以在 UI 中表示为不伪造信息的 legacy/unknown 状态。
 
-Required behavior:
+Telemetry、Run APIs、SSE payloads、返回给前端的 logs 和 error payloads 绝不能暴露：
 
-1. Load the catalog when the Create Run flow needs it.
-2. Show a Provider selector using safe display names.
-3. Show a Model selector containing only Models belonging to the selected Provider.
-4. Do not enable new Run creation until a valid Provider/Model pair is selected.
-5. Submit both `provider_id` and `model_id` in the new UI flow.
-6. When Provider changes, clear/reset a Model selection that is not valid for the newly selected Provider.
-7. Do not silently replace an invalid/stale selection if the backend rejects it.
-8. Show a clear failure state and let the user choose again.
+- API keys；
+- bearer tokens；
+- auth headers；
+- 私有/内部 Base URLs；
+- secret environment variables；
+- 原始 backend Provider config objects。
 
-### Catalog states
+如果现有 Run-level Telemetry 已经提供稳定位置来暴露所选 Provider/Model，本任务不要求把 Provider/Model metadata 添加到每一个单独的 SSE event 中。
 
-- **Loading:** selectors/Create action are not usable yet.
-- **Empty:** explain that no Provider/Model is available and disable Create.
-- **Error:** explain that the catalog could not be loaded and disable Create; allow retry.
-- **Loaded:** enable Create only after a valid pair exists.
+契约保持规则：
 
-The frontend MUST NOT contain Provider credentials, private Base URLs, or a parallel hard-coded authoritative catalog.
+- 保持现有 `HealthResponse` 的字段形状和语义不变。
+- 不要仅为了表示 Provider/Model selection 而新增 `RunEventType`。
+- 优先通过持久化的 Run/Telemetry metadata 暴露所选择的 Provider/Model。
 
-### Existing Run display
+## 10. Per-model pricing 语义
 
-Run details/Telemetry UI MUST show the persisted Provider and Model display names for new Runs.
+任何受本功能影响的 pricing/cost 逻辑都必须以 Model 为作用域。
 
-Old Runs with no metadata MUST render safely without fabricating a selection.
+要求：
 
-## 12. Mock and Scenario Mock requirements
+- pricing 属于某个具体 Model，而不是仅属于 Provider 或一个全局 default；
+- pricing 配置仅保留在后端；
+- 如果计算 cost estimate，必须使用该 Run 所选 Model 的 pricing；
+- 绝不能将另一个 Model 的 pricing 作为 fallback；
+- 如果所选 Model 的 pricing 未配置/未知，则得到的 cost/price 值必须是 `null`/unknown，而不是 `0`，也不能猜测；
+- 显式配置为 0 的价格必须与缺少 pricing 明确区分；
+- 除非 baseline 本身已经要求执行时必须存在 pricing，否则缺少 pricing 不得阻止 Run 执行。
 
-Existing Mock and Scenario Mock behavior MUST remain deterministic.
+如果 baseline 已经存在 pricing unit/currency schema，不要重新发明新的 schema。尽可能保留现有 pricing unit 和公开 Telemetry contract，同时将 lookup 语义调整为 per-model。
 
-The Provider/Model selection feature MUST NOT:
+## 11. 前端行为
 
-- introduce network access into deterministic mock tests;
-- make mock outputs depend on nondeterministic catalog ordering;
-- change the logical Agent pipeline;
-- make Scenario Mock behavior depend on a real external Provider.
+新的 Create Run UI 必须从后端 catalog 获取全部 Provider/Model 选项。
 
-Test fixtures may supply a deterministic backend catalog. If Mock/Scenario Mock selections are represented in that catalog, their IDs/display names MUST also be deterministic.
+要求行为：
 
-Existing mock golden/contract behavior should remain unchanged except where backward-compatible Provider/Model metadata is intentionally added.
+1. 在 Create Run 流程需要 catalog 时加载它。
+2. 使用安全 display name 展示 Provider selector。
+3. Model selector 只能展示属于当前已选 Provider 的 Models。
+4. 在选择完整、有效的 Provider/Model 组合之前，不得启用新 Run 创建。
+5. 新 UI 流程必须同时提交 `provider_id` 和 `model_id`。
+6. Provider 改变时，如果当前 Model 对新 Provider 无效，必须清空/重置该 Model selection。
+7. 如果 backend 拒绝一个 invalid/stale selection，不得在客户端静默替换它。
+8. 展示清晰的失败状态，并允许用户重新选择。
 
-## 13. No silent fallback — canonical rule
+### Catalog 状态
 
-The following cases MUST fail explicitly and MUST NOT silently fall back:
+- **Loading：** selector/Create action 暂时不可用。
+- **Empty：** 说明当前没有可用 Provider/Model，并禁用 Create。
+- **Error：** 说明 catalog 加载失败并禁用 Create；允许 retry。
+- **Loaded：** 仅在已选择有效组合后启用 Create。
 
-- unknown `provider_id`;
-- unknown `model_id`;
-- a Model that exists, but under a different Provider;
-- an unavailable/disabled pair;
-- a persisted explicit selection that can no longer be resolved for execution;
-- catalog configuration/loading failure.
+前端不得包含 Provider credentials、私有 Base URLs 或一份并行的 hard-coded authoritative catalog。
 
-The only compatibility resolution allowed is the legacy behavior described in Sections 5.2 and 7 for requests/Runs that genuinely predate the new explicit selection fields.
+### 既有 Run 展示
 
-## 14. Required test coverage
+Run details/Telemetry UI 必须展示新 Run 持久化的 Provider 和 Model display names。
 
-Round 2 is incomplete without tests. These are implementation requirements for the coding systems; the benchmark operator does not need to build a separate large hidden-test suite before starting Round 2.
+没有 metadata 的旧 Run 必须安全渲染，且不得伪造 selection。
+
+## 12. Mock 与 Scenario Mock 要求
+
+现有 Mock 和 Scenario Mock 行为必须继续保持确定性。
+
+Provider/Model selection 功能不得：
+
+- 在确定性的 mock tests 中引入 network access；
+- 让 mock 输出依赖不确定的 catalog ordering；
+- 改变逻辑 Agent pipeline；
+- 让 Scenario Mock 行为依赖真实外部 Provider。
+
+测试 fixture 可以提供确定性的 backend catalog。如果 catalog 中表示 Mock/Scenario Mock selection，其 IDs/display names 也必须是确定性的。
+
+除非为了以向后兼容方式增加 Provider/Model metadata，现有 mock golden/contract 行为应保持不变。
+
+## 13. 禁止静默 fallback — 规范规则
+
+以下情况必须明确失败，并且绝不能静默 fallback：
+
+- 未知 `provider_id`；
+- 未知 `model_id`；
+- Model 确实存在，但属于另一个 Provider；
+- 不可用/被禁用的组合；
+- 已持久化的显式 selection 当前已经无法解析执行；
+- catalog 配置/加载失败。
+
+唯一允许的兼容性解析，是第 5.2 节和第 7 节中针对真正早于新显式 selection 字段的 requests/Runs 所定义的 legacy 行为。
+
+## 14. 必需测试覆盖
+
+Round 2 如果缺少测试则视为未完成。这些是对 coding systems 的实现要求；benchmark operator 在开始 Round 2 前不需要额外构建大型 hidden-test suite。
 
 ### 14.1 Backend pytest
 
-At minimum cover:
+至少覆盖：
 
-- safe catalog success response;
-- catalog never serializes credentials/private Base URLs or actual model pricing configuration;
-- valid explicit selection creates a Run;
-- selection persists IDs + display names;
-- unknown Provider fails with no Run created;
-- unknown Model fails with no Run created;
-- Provider/Model cross-pair mismatch fails;
-- only one of the two selection fields fails validation;
-- legacy Create Run request with neither field remains compatible;
-- old Run snapshot/database row without new fields still loads;
-- no SQL DDL migration is required;
-- persisted new Run survives repository/service re-open and retains metadata;
-- concurrent Runs with different selections remain isolated;
-- unavailable persisted explicit selection fails rather than falling back;
-- per-model pricing is selected correctly;
-- missing selected-model pricing yields `null`/unknown rather than `0`/fallback;
-- Mock/Scenario Mock determinism remains intact;
-- existing Pause/Resume/Cancel behavior remains intact for selected Runs;
-- existing `HealthResponse` contract remains unchanged.
+- safe catalog 成功响应；
+- catalog 永远不会序列化 credentials/private Base URLs 或真实 model pricing 配置；
+- 有效显式 selection 可以创建 Run；
+- selection 持久化 IDs + display names；
+- unknown Provider 失败且不创建 Run；
+- unknown Model 失败且不创建 Run；
+- Provider/Model cross-pair mismatch 失败；
+- 两个 selection 字段只提供其中一个时校验失败；
+- 两个字段都不提供的 legacy Create Run request 仍保持兼容；
+- 缺少新字段的旧 Run snapshot/database row 仍可加载；
+- 不需要 SQL DDL migration；
+- 持久化的新 Run 在 repository/service reopen 后仍保留 metadata；
+- 使用不同 selections 的并发 Runs 保持隔离；
+- 已持久化的显式 selection 不可用时失败，而不是 fallback；
+- 正确选择 per-model pricing；
+- 所选 Model 缺少 pricing 时得到 `null`/unknown，而不是 `0`/fallback；
+- Mock/Scenario Mock determinism 保持不变；
+- 已选择 Provider/Model 的 Runs 仍保持既有 Pause/Resume/Cancel 行为；
+- 既有 `HealthResponse` contract 保持不变。
 
 ### 14.2 Contract tests
 
-At minimum cover:
+至少覆盖：
 
-- `GET /providers` safe response shape;
-- backward-compatible Create Run request/response schema;
-- explicit `provider_id + model_id` request fields;
-- nullable Provider/Model metadata for old Runs;
-- non-null persisted metadata for new Runs;
-- existing SSE/REST contracts do not regress;
-- no new `RunEventType` is required solely for this feature.
+- `GET /providers` 的 safe response shape；
+- 向后兼容的 Create Run request/response schema；
+- 显式 `provider_id + model_id` request fields；
+- 旧 Run 中 nullable 的 Provider/Model metadata；
+- 新 Run 中 non-null 的 persisted metadata；
+- 既有 SSE/REST contracts 不发生回归；
+- 不需要仅为了该功能新增 `RunEventType`。
 
 ### 14.3 Vitest
 
-At minimum cover:
+至少覆盖：
 
-- catalog loading state;
-- empty state;
-- error state and retry behavior;
-- Provider selection filters Models;
-- Provider change invalidates an incompatible Model selection;
-- Create disabled without a complete valid pair;
-- Create request sends both IDs;
-- backend selection error is surfaced without client-side fallback;
-- new Run metadata renders in Run/Telemetry UI;
-- old Run with null/missing metadata renders safely.
+- catalog loading state；
+- empty state；
+- error state 与 retry 行为；
+- Provider selection 会过滤 Models；
+- Provider 改变时使不兼容的 Model selection 失效；
+- 没有完整有效组合时 Create disabled；
+- Create request 同时发送两个 IDs；
+- backend selection error 被展示出来，且 client-side 不进行 fallback；
+- 新 Run metadata 能够在 Run/Telemetry UI 中展示；
+- null/missing metadata 的旧 Run 能安全渲染。
 
 ### 14.4 Playwright E2E
 
-At minimum cover:
+至少覆盖：
 
-- load catalog → select Provider → select Model → create Run → observe the same persisted selection in Run/Telemetry UI;
-- create two Runs with different selections and verify each Run keeps its own metadata/behavior;
-- empty or failed catalog prevents new Run creation;
-- legacy/existing Run navigation remains functional.
+- 加载 catalog → 选择 Provider → 选择 Model → 创建 Run → 在 Run/Telemetry UI 中观察到同一份持久化 selection；
+- 创建两个使用不同 selections 的 Runs，并验证每个 Run 都保持自己的 metadata/behavior；
+- empty 或 failed catalog 会阻止创建新 Run；
+- legacy/existing Run navigation 仍正常工作。
 
-Playwright tests SHOULD use deterministic local/mock fixtures and MUST NOT require billable external model calls.
+Playwright tests 应使用确定性的本地/mock fixtures，并且绝不能要求 billable external model calls。
 
-### 14.5 Static/type/build checks
+### 14.5 Static/type/build 检查
 
-Run all relevant existing backend/frontend static, type, and build checks required by repository conventions.
+运行仓库惯例要求的所有相关 backend/frontend static、type 和 build 检查。
 
-## 15. Acceptance criteria
+## 15. 验收标准
 
-The implementation is functionally complete only if all of the following are true:
+只有在以下条件全部成立时，实现才算功能完整：
 
-- [ ] New UI-created Runs always submit an explicit `provider_id + model_id` pair.
-- [ ] Backend catalog is authoritative and safe.
-- [ ] No credential/private Base URL or actual model pricing configuration reaches the frontend catalog.
-- [ ] Invalid or unavailable explicit selections fail with no fallback and no partial Run.
-- [ ] Selection is bound per Run and isolated across concurrent Runs.
-- [ ] New Run snapshots persist IDs + display names.
-- [ ] Old APIs remain compatible.
-- [ ] Old SQLite data remains readable with no SQL DDL migration.
-- [ ] Persisted historical selections do not silently change when catalog config changes.
-- [ ] Per-model pricing semantics are correct; missing price is `null`/unknown.
-- [ ] Mock and Scenario Mock remain deterministic.
-- [ ] Core Agent loop and lifecycle behavior remain unchanged.
-- [ ] Existing `HealthResponse` and `RunEventType` contracts remain stable.
-- [ ] Catalog loading/empty/error states prevent new UI Run creation.
-- [ ] Backend pytest, contract, Vitest, Playwright, and static/type/build coverage is added or updated and relevant suites pass.
+- [ ] 新 UI 创建的 Run 始终显式提交 `provider_id + model_id` 组合。
+- [ ] Backend catalog 是权威且安全的。
+- [ ] 前端 catalog 不会收到 credential/private Base URL 或真实 model pricing 配置。
+- [ ] 无效或不可用的显式 selections 会失败，不 fallback，也不会产生部分 Run。
+- [ ] selection 按 Run 绑定，并在并发 Runs 之间隔离。
+- [ ] 新 Run snapshots 持久化 IDs + display names。
+- [ ] 旧 APIs 保持兼容。
+- [ ] 旧 SQLite 数据无需 SQL DDL migration 即可读取。
+- [ ] catalog 配置变化后，持久化的历史 selections 不会被静默改变。
+- [ ] Per-model pricing 语义正确；缺少 price 时为 `null`/unknown。
+- [ ] Mock 和 Scenario Mock 保持确定性。
+- [ ] 核心 Agent loop 和 lifecycle 行为保持不变。
+- [ ] 既有 `HealthResponse` 和 `RunEventType` contracts 保持稳定。
+- [ ] Catalog 的 loading/empty/error 状态会阻止新 UI 创建 Run。
+- [ ] Backend pytest、contract、Vitest、Playwright 以及 static/type/build 覆盖被新增或更新，并且相关 suites 通过。
 
-## 16. Explicit non-goals
+## 16. 明确非目标
 
-Round 2 does NOT require:
+Round 2 不要求：
 
-- editing Provider credentials from the frontend;
-- user-supplied arbitrary Base URLs or API keys;
-- exposing backend model price tables in the catalog;
-- changing the Provider/Model of an already-created Run;
-- adding a database column or SQL DDL migration;
-- redesigning the Agent pipeline;
-- redesigning REST/SSE transport;
-- redesigning Pause/Resume/Cancel;
-- adding a new `RunEventType` solely for Provider/Model selection;
-- broad Provider abstraction refactors unrelated to Run-scoped binding;
-- adding new external Providers beyond what is needed to represent the backend-controlled configured catalog;
-- making live paid-provider calls in E2E tests.
+- 从前端编辑 Provider credentials；
+- 用户提供任意 Base URLs 或 API keys；
+- 在 catalog 中暴露 backend model price tables；
+- 修改一个已经创建的 Run 的 Provider/Model；
+- 新增 database column 或 SQL DDL migration；
+- 重新设计 Agent pipeline；
+- 重新设计 REST/SSE transport；
+- 重新设计 Pause/Resume/Cancel；
+- 仅为了 Provider/Model selection 新增 `RunEventType`；
+- 与 Run-scoped binding 无关的大范围 Provider abstraction refactor；
+- 除表示 backend-controlled configured catalog 所需之外，额外增加新的 external Providers；
+- 在 E2E tests 中进行真实付费 Provider 调用。
 
-## 17. Implementation freedom
+## 17. 实现自由度
 
-This benchmark evaluates whether the system can understand the baseline repository and implement this behavior cleanly. Therefore internal implementation choices are intentionally not prescribed beyond the invariants above.
+本 benchmark 评估系统能否理解 baseline 仓库，并干净地实现该行为。因此，除上述不变量外，不规定具体内部实现选择。
 
-Agents may choose repository-appropriate module boundaries, types, factories, dependency injection, and helper abstractions. They MUST NOT weaken or reinterpret the externally observable requirements to match their preferred architecture.
+Agent 可以选择符合仓库惯例的 module boundaries、types、factories、dependency injection 和 helper abstractions。不得为了适配自己偏好的架构而削弱或重新解释外部可观察要求。

@@ -1,0 +1,241 @@
+round:
+  id: 2
+  name: implementation
+  task: Run-level Provider / Model Selection
+  phase: implementation
+  status: complete
+
+baseline:
+  tag: ai-coding-benchmark-v1
+  commit: 0edc069
+
+frozen_inputs:
+  canonical_spec: ../../specs/round-02-canonical-spec.md
+  canonical_spec_sha256: 4c6c7bc167262b80c1957362fe818934b4ff9e5a54e0fe2892e46b7184fd8a68
+  implementation_prompt: ../../prompts/round-02-implementation.md
+  implementation_prompt_sha256: c6ad086d4d153d5f55c4e85ef12b3f83abbc0966e3469b16574c4c7fd5ec1446
+
+evaluation:
+  report: ../../rounds/round-02-implementation.md
+  priority:
+    - canonical correctness and critical safety/compatibility
+    - post-run regression/evaluation
+    - autonomy and semantic manual interventions
+    - scope discipline and reviewability
+    - efficiency
+  uniform_post_run_commands:
+    - ./.venv/bin/ruff format --check backend
+    - ./.venv/bin/ruff check backend
+    - ./.venv/bin/mypy backend
+    - ./.venv/bin/python -m pytest backend/tests -p no:cacheprovider -q
+    - npm run typecheck
+    - npm run lint
+    - npm run test:run
+    - npm run build
+    - npx playwright test --project=chromium
+  shared_evaluator_notes:
+    - "Cursor baseline reproduced the backend/tests/test_node_timings.py Ruff issue; matching Claude/Codex Ruff failures are baseline-attributed."
+    - "Cursor, Codex, Claude, and K3 hit the same Playwright web-server path failure (.venvScriptspython.exe); these are recorded as infra_error."
+    - "K2.6 modified Playwright configuration and was the only worktree where the uniform operator E2E command executed successfully."
+    - "Temporary dependency symlinks used to evaluate the unchanged Cursor baseline were removed afterward and are not part of Cursor's code delta."
+
+runs:
+  - id: claude-opus5
+    raw_file: claude-opus5.md
+    raw_sha256: bb543a8af66dc6956d6f4fa4ff89cb4ea90cec1cea8afce45ae0a008cdd3aae9
+    patch_file: claude-opus5.patch
+    patch_sha256: 4c23718373a50c69b186c13d623350af773683c7d9d6383f13faeb3d2d76fa33
+    evaluator_file: claude-opus5-evaluator.md
+    evaluator_sha256: 23075929b4518ef7a4e68d0b5e0f45ac462c473ec4143e11d200dfc944927d88
+    product: Claude Code
+    harness_version: 2.1.258.1
+    model: Opus 5
+    provider: internal
+    reasoning: unknown
+    branch: bench/provider-claude
+    duration_sec: null
+    context_used_k: 98.2
+    context_limit_k: 200
+    input_tokens: null
+    output_tokens: null
+    cost_cny: null
+    manual_interventions: 0
+    files_changed: 23
+    lines_added: 2320
+    lines_deleted: 96
+    first_test_result: not_run
+    repair_rounds: 0
+    final_test_result: not_run
+    completion_status: partial
+    canonical_acceptance: partial
+    evaluator:
+      ruff_format: fail_baseline
+      ruff_check: fail_baseline
+      mypy: pass
+      pytest: "pass: 308"
+      frontend_typecheck: "fail: 2 errors"
+      eslint: fail
+      vitest: "fail: 2 failed / 182 passed"
+      build: fail
+      playwright: infra_error
+    notes: "Transcript ended during implementation with no normal completion response. Operator evaluation later confirmed genuine frontend regressions; shared Ruff/Playwright issues are not attributed as feature regressions."
+
+  - id: codex-gpt56-sol
+    raw_file: codex-gpt5.6sol.md
+    raw_sha256: c0ec6491f5fc4780250efa79f219a7c67419cf39915c53dbfade1c0d4e79b10f
+    patch_file: codex-gpt5.6sol.patch
+    patch_sha256: b44934c2228ed5d57693b15681d10a8fa501f8047efd0b068e55f7b25cbfa5f0
+    evaluator_file: codex-gpt5.6sol-evaluator.md
+    evaluator_sha256: fbf04171a9c6e137eb87fbcf6b1c5d4cd8ddf9809752d550dd9f46e71872f8a8
+    product: Codex
+    harness_version: 0.153.4
+    model: GPT-5.6 Sol
+    provider: internal-openai-compatible-gateway
+    reasoning: unknown
+    branch: bench/provider-codex
+    duration_sec: 1295
+    context_used_k: null
+    context_limit_k: null
+    input_tokens: null
+    output_tokens: null
+    cost_cny: null
+    manual_interventions: 0
+    files_changed: 15
+    lines_added: 563
+    lines_deleted: 18
+    first_test_result: infra_error
+    repair_rounds: null
+    final_test_result: pass
+    completion_status: completed
+    canonical_acceptance: partial
+    evaluator:
+      ruff_format: fail_baseline
+      ruff_check: fail_baseline
+      mypy: pass
+      pytest: "pass: 279"
+      frontend_typecheck: pass
+      eslint: pass
+      vitest: "pass: 184"
+      build: pass
+      playwright: infra_error
+    notes: "Normal completion at 21m35s. Permission mode changed from Ask to Approve for me during the run; this is an operational runtime deviation, not a semantic intervention. Required canonical coverage remained thinner than the strongest implementations."
+
+  - id: cursor-grok46-medium
+    raw_file: cursor-grok4.6.md
+    raw_sha256: 3720807842e3bb7ea48a6bc0dd201df01287128c6d3f50cdf41573da1b304703
+    patch_file: null
+    patch_sha256: null
+    evaluator_file: cursor-grok4.6-evaluator.md
+    evaluator_sha256: 8b668aa8ecae60e8c30da79d5e04a4e36291fed42c31470d270900b58afabb88
+    product: Cursor
+    harness_version: unknown
+    model: Grok 4.6 Medium
+    provider: Cursor
+    reasoning: Medium
+    branch: bench/provider-cursor
+    duration_sec: null
+    context_used_k: null
+    context_limit_k: null
+    input_tokens: null
+    output_tokens: null
+    cost_cny: null
+    manual_interventions: 0
+    files_changed: 0
+    lines_added: 0
+    lines_deleted: 0
+    first_test_result: not_run
+    repair_rounds: 0
+    final_test_result: not_run
+    completion_status: blocked
+    canonical_acceptance: not_implemented
+    evaluator:
+      ruff_format: fail_baseline
+      ruff_check: fail_baseline
+      mypy: pass
+      pytest: "pass: 276"
+      frontend_typecheck: pass
+      eslint: pass
+      vitest: "pass: 184"
+      build: pass
+      playwright: infra_error
+    notes: "Free quota exhausted before implementation; final worktree remained identical to baseline. Evaluator results are baseline-control evidence, not implementation evidence."
+
+  - id: kimi-k26
+    raw_file: kimi-k26.md
+    raw_sha256: 4ee5054044a665db9b7c5218a4b0f61991e9e2f247aef1640602580788879d56
+    patch_file: kimi-k26.patch
+    patch_sha256: b50dd705597f34bd1255d1d4cc2e084c01c5209e8750f5c5ecfb664c3550d7a3
+    evaluator_file: kimi-k26-evaluator.md
+    evaluator_sha256: 3364d06a23db64f370156bf90fbc7eff16b004a156d2d637eded2cd342628c91
+    product: Kimi Code
+    harness_version: 0.41.0
+    model: Kimi K2.6
+    provider: internal-openai-compatible-gateway
+    reasoning: unknown
+    branch: bench/provider-kimi
+    duration_sec: null
+    context_used_k: null
+    context_limit_k: null
+    input_tokens: null
+    output_tokens: null
+    cost_cny: null
+    manual_interventions: 0
+    files_changed: 31
+    lines_added: 1639
+    lines_deleted: 94
+    first_test_result: null
+    repair_rounds: null
+    final_test_result: pass
+    completion_status: completed
+    canonical_acceptance: partial
+    evaluator:
+      ruff_format: pass
+      ruff_check: pass
+      mypy: pass
+      pytest: "pass: 300"
+      frontend_typecheck: pass
+      eslint: pass
+      vitest: "pass: 193"
+      build: pass
+      playwright: "pass: 23"
+    notes: "Captured transcript begins after earlier implementation work, so the true first-test result and exact repair-round count are unavailable. Operator gates were all green, but acceptance review found different-pair concurrency and true per-model pricing semantics were not established."
+
+  - id: kimi-k3
+    raw_file: kimi-k3.md
+    raw_sha256: ed4534f28594d9e52707c9be828adeccf11771c5ce19bdbdebc921b870a2ee85
+    patch_file: kimi-k3.patch
+    patch_sha256: ac80db5721e033998796c44266b00429d9a37c6ac737240bb79df1d048db6c8b
+    evaluator_file: kimi-k3-evaluator.md
+    evaluator_sha256: b263c1bd42de464ed1ef83c00cbb6adbdbc7578d036310af1ea601aff724215f
+    product: Kimi Code
+    harness_version: 0.41.0
+    model: Kimi K3
+    provider: kimi-open-platform
+    reasoning: max-default
+    branch: bench/provider-kimi-k3
+    duration_sec: null
+    context_used_k: null
+    context_limit_k: null
+    input_tokens: null
+    output_tokens: null
+    cost_cny: null
+    manual_interventions: 0
+    files_changed: 34
+    lines_added: 2551
+    lines_deleted: 59
+    first_test_result: null
+    repair_rounds: null
+    final_test_result: pass
+    completion_status: blocked
+    canonical_acceptance: provisional_pass
+    evaluator:
+      ruff_format: fail_minor_format
+      ruff_check: pass
+      mypy: pass
+      pytest: "pass: 307"
+      frontend_typecheck: pass
+      eslint: pass
+      vitest: "pass: 204"
+      build: pass
+      playwright: infra_error
+    notes: "Run terminated on provider 429 / insufficient balance before a normal final response. Frontend subagent alone exposed 49m35s, 132k tokens, and 122 tool calls. Operator Playwright was blocked by the shared evaluator path issue; canonical review still found the strongest final implementation."

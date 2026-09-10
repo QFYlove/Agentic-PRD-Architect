@@ -1,0 +1,964 @@
+diff --git a/backend/main.py b/backend/main.py
+index ffed52a..af06ec6 100644
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -24,6 +24,7 @@ from backend.observability import log_event
+ from backend.providers.base import LLMProvider
+ from backend.providers.compatible import OpenAICompatibleLLMProvider
+ from backend.providers.mock import MockLLMProvider
++from backend.providers.registry import ProviderRegistry
+ from backend.providers.scenario import ScenarioController, ScenarioMockLLMProvider
+ from backend.run_manager import RunManager
+ from backend.run_store import InMemoryRunStore, SQLiteRunStore
+@@ -36,6 +37,7 @@ from backend.schemas import (
+     EvaluationResult,
+     HealthResponse,
+     PRDVersion,
++    ProviderCatalogResponse,
+     ResumeRunRequest,
+     RevisionPlan,
+     RoleReview,
+@@ -86,6 +88,7 @@ def create_app(
+     *,
+     settings: Settings | None = None,
+     provider: LLMProvider | None = None,
++    provider_registry: ProviderRegistry | None = None,
+ ) -> FastAPI:
+     app_settings = settings or get_settings()
+     scenario_controller: ScenarioController | None = None
+@@ -158,6 +161,7 @@ def create_app(
+         provider=provider,
+         run_store=run_store,
+         event_store=event_store,
++        provider_registry=provider_registry,
+     )
+     manager.set_workflow(AgentWorkflow(manager))
+ 
+@@ -249,6 +253,12 @@ def create_app(
+             provider="mock" if provider.is_mock else app_settings.llm_provider,
+         )
+ 
++    @application.get(
++        "/api/providers", response_model=ProviderCatalogResponse, tags=["system"]
++    )
++    async def providers() -> ProviderCatalogResponse:
++        return manager.provider_registry.catalog()
++
+     if scenario_controller is not None:
+ 
+         @application.put("/api/test/scenario", tags=["test"])
+diff --git a/backend/providers/registry.py b/backend/providers/registry.py
+new file mode 100644
+index 0000000..4e30b3b
+--- /dev/null
++++ b/backend/providers/registry.py
+@@ -0,0 +1,92 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from decimal import Decimal
++
++from backend.errors import AppError, ProviderUnavailableError
++from backend.providers.base import LLMProvider
++from backend.schemas import (
++    ModelCatalogItem,
++    ProviderCatalogItem,
++    ProviderCatalogResponse,
++)
++
++
++@dataclass(frozen=True)
++class ModelRegistration:
++    model_id: str
++    display_name: str
++    provider: LLMProvider
++    input_price_per_million: Decimal | None = None
++    output_price_per_million: Decimal | None = None
++
++    @property
++    def has_pricing(self) -> bool:
++        return (
++            self.input_price_per_million is not None
++            and self.output_price_per_million is not None
++        )
++
++
++@dataclass(frozen=True)
++class ProviderRegistration:
++    provider_id: str
++    display_name: str
++    models: tuple[ModelRegistration, ...]
++
++
++class ProviderRegistry:
++    def __init__(
++        self,
++        providers: tuple[ProviderRegistration, ...],
++        *,
++        legacy_selection: tuple[str, str],
++    ) -> None:
++        self._providers = providers
++        self.legacy_selection = legacy_selection
++
++    def catalog(self) -> ProviderCatalogResponse:
++        return ProviderCatalogResponse(
++            providers=[
++                ProviderCatalogItem(
++                    provider_id=provider.provider_id,
++                    provider_display_name=provider.display_name,
++                    models=[
++                        ModelCatalogItem(
++                            model_id=model.model_id,
++                            model_display_name=model.display_name,
++                        )
++                        for model in provider.models
++                    ],
++                )
++                for provider in self._providers
++            ]
++        )
++
++    def resolve(
++        self, provider_id: str, model_id: str
++    ) -> tuple[ProviderRegistration, ModelRegistration]:
++        provider = next(
++            (item for item in self._providers if item.provider_id == provider_id),
++            None,
++        )
++        if provider is None:
++            raise AppError(
++                "INVALID_PROVIDER_SELECTION",
++                "The selected provider is not available.",
++                422,
++            )
++        model = next((m for m in provider.models if m.model_id == model_id), None)
++        if model is None:
++            raise AppError(
++                "INVALID_MODEL_SELECTION",
++                "The selected model is not available for this provider.",
++                422,
++            )
++        return provider, model
++
++    def resolve_legacy(self) -> tuple[ProviderRegistration, ModelRegistration]:
++        try:
++            return self.resolve(*self.legacy_selection)
++        except AppError as exc:
++            raise ProviderUnavailableError from exc
+diff --git a/backend/run_manager.py b/backend/run_manager.py
+index ef243e0..2fcea52 100644
+--- a/backend/run_manager.py
++++ b/backend/run_manager.py
+@@ -8,11 +8,17 @@ from typing import Any, Protocol
+ from uuid import UUID, uuid4
+ 
+ from backend.config import Settings
+-from backend.errors import RunCapacityError, RunConflictError
++from backend.errors import (
++    AppError,
++    ProviderUnavailableError,
++    RunCapacityError,
++    RunConflictError,
++)
+ from backend.event_store import TRANSIENT_EVENT_TYPES, EventStore
+ from backend.language import detect_output_language
+ from backend.observability import log_event
+ from backend.providers.base import LLMProvider
++from backend.providers.registry import ProviderRegistry
+ from backend.run_store import InMemoryRunStore
+ from backend.schemas import (
+     CreateRunRequest,
+@@ -29,7 +35,7 @@ from backend.schemas import (
+     utc_now,
+ )
+ from backend.state_machine import TERMINAL_RUN_STATUSES, require_transition
+-from backend.telemetry import add_usage, estimate_cost
++from backend.telemetry import add_usage, estimate_model_cost
+ 
+ 
+ class WorkflowRunner(Protocol):
+@@ -48,9 +54,45 @@ class RunManager:
+         provider: LLMProvider,
+         run_store: InMemoryRunStore,
+         event_store: EventStore,
++        provider_registry: ProviderRegistry | None = None,
+     ) -> None:
+         self.settings = settings
+         self.provider = provider
++        if provider_registry is None:
++            from backend.providers.registry import (
++                ModelRegistration,
++                ProviderRegistration,
++            )
++
++            provider_id = "mock" if provider.is_mock else settings.llm_provider
++            model_id = (
++                "mock-default"
++                if provider.is_mock
++                else (
++                    settings.deepseek_model
++                    if settings.llm_provider == "deepseek"
++                    else settings.glm_model
++                )
++            )
++            provider_registry = ProviderRegistry(
++                (
++                    ProviderRegistration(
++                        provider_id,
++                        "Mock" if provider.is_mock else provider_id.title(),
++                        (
++                            ModelRegistration(
++                                model_id,
++                                "Mock Default" if provider.is_mock else model_id,
++                                provider,
++                                settings.model_input_price_per_million,
++                                settings.model_output_price_per_million,
++                            ),
++                        ),
++                    ),
++                ),
++                legacy_selection=(provider_id, model_id),
++            )
++        self.provider_registry = provider_registry
+         self.run_store = run_store
+         self.event_store = event_store
+         self.workflow: WorkflowRunner | None = None
+@@ -125,6 +167,15 @@ class RunManager:
+         if not self._accepting:
+             raise RunConflictError("APP_SHUTTING_DOWN", "The application is stopping.")
+         async with self._create_lock:
++            if request.provider_id is None:
++                selected_provider, selected_model = (
++                    self.provider_registry.resolve_legacy()
++                )
++            else:
++                assert request.model_id is not None
++                selected_provider, selected_model = self.provider_registry.resolve(
++                    request.provider_id, request.model_id
++                )
+             if await self.run_store.active_count() >= self.settings.max_concurrent_runs:
+                 raise RunCapacityError
+             for evicted in await self.run_store.make_room():
+@@ -137,6 +188,10 @@ class RunManager:
+                 user_idea=request.user_idea,
+                 target_audience=request.target_audience,
+                 user_constraints=request.user_constraints,
++                provider_id=selected_provider.provider_id,
++                provider_display_name=selected_provider.display_name,
++                model_id=selected_model.model_id,
++                model_display_name=selected_model.display_name,
+                 # Decided once, from the user's own words, so the generator, all
+                 # three reviewers, and the optimizer cannot each pick a different
+                 # language from their own slice of the input.
+@@ -155,8 +210,10 @@ class RunManager:
+                     "aggregator": NodeStatus.PENDING,
+                     "optimizer": NodeStatus.PENDING,
+                 },
+-                is_mock=self.provider.is_mock,
+-                cost_available=self.provider.is_mock or self.settings.has_model_pricing,
++                is_mock=selected_model.provider.is_mock,
++                cost_available=(
++                    selected_model.provider.is_mock or selected_model.has_pricing
++                ),
+                 created_at=now,
+                 updated_at=now,
+             )
+@@ -176,6 +233,17 @@ class RunManager:
+         )
+         return snapshot.model_copy(deep=True)
+ 
++    async def provider_for_run(self, run_id: UUID) -> LLMProvider:
++        state = await self.get_run(run_id)
++        if state.provider_id is None or state.model_id is None:
++            return self.provider_registry.resolve_legacy()[1].provider
++        try:
++            return self.provider_registry.resolve(state.provider_id, state.model_id)[
++                1
++            ].provider
++        except AppError as exc:
++            raise ProviderUnavailableError from exc
++
+     async def start_run(self, run_id: UUID) -> None:
+         if self.workflow is None:
+             raise RuntimeError("Workflow has not been configured")
+@@ -521,18 +589,26 @@ class RunManager:
+         usage: TokenUsage,
+     ) -> RunSnapshot:
+         event_payload: dict[str, Any] = {}
++        snapshot = await self.get_run(run_id)
++        if snapshot.provider_id is None or snapshot.model_id is None:
++            selected_model = self.provider_registry.resolve_legacy()[1]
++        else:
++            selected_model = self.provider_registry.resolve(
++                snapshot.provider_id, snapshot.model_id
++            )[1]
+ 
+         def mutate(state: RunSnapshot) -> None:
+             previous = state.node_tokens.get(node, TokenUsage())
+             state.node_tokens[node] = add_usage(previous, usage)
+             state.total_tokens = add_usage(state.total_tokens, usage)
+-            state.estimated_cost_usd = estimate_cost(
++            state.estimated_cost_usd = estimate_model_cost(
+                 state.total_tokens,
+-                self.settings,
+-                is_mock=self.provider.is_mock,
++                selected_model.input_price_per_million,
++                selected_model.output_price_per_million,
++                is_mock=selected_model.provider.is_mock,
+             )
+             state.cost_available = (
+-                self.provider.is_mock or state.estimated_cost_usd is not None
++                selected_model.provider.is_mock or state.estimated_cost_usd is not None
+             )
+             event_payload.update(
+                 {
+diff --git a/backend/schemas.py b/backend/schemas.py
+index d38d8a5..fe8410c 100644
+--- a/backend/schemas.py
++++ b/backend/schemas.py
+@@ -104,6 +104,14 @@ class CreateRunRequest(StrictModel):
+     user_constraints: str | None = Field(default=None, max_length=2000)
+     quality_threshold: float = Field(default=85.0, ge=50, le=100)
+     max_iterations: int = Field(default=3, ge=1, le=5)
++    provider_id: str | None = Field(default=None, min_length=1, max_length=100)
++    model_id: str | None = Field(default=None, min_length=1, max_length=200)
++
++    @model_validator(mode="after")
++    def validate_selection_pair(self) -> CreateRunRequest:
++        if (self.provider_id is None) != (self.model_id is None):
++            raise ValueError("provider_id and model_id must be provided together")
++        return self
+ 
+     @field_validator("user_idea")
+     @classmethod
+@@ -316,11 +324,31 @@ def utc_now() -> datetime:
+     return datetime.now(UTC)
+ 
+ 
++class ModelCatalogItem(StrictModel):
++    model_id: str
++    model_display_name: str
++    capabilities: dict[str, Any] | None = None
++
++
++class ProviderCatalogItem(StrictModel):
++    provider_id: str
++    provider_display_name: str
++    models: list[ModelCatalogItem]
++
++
++class ProviderCatalogResponse(StrictModel):
++    providers: list[ProviderCatalogItem]
++
++
+ class PRDRunState(StrictModel):
+     run_id: UUID
+     user_idea: str
+     target_audience: str | None = None
+     user_constraints: str | None = None
++    provider_id: str | None = None
++    provider_display_name: str | None = None
++    model_id: str | None = None
++    model_display_name: str | None = None
+     output_language: str = DEFAULT_OUTPUT_LANGUAGE
+     """The language every agent in this run must write in.
+ 
+diff --git a/backend/telemetry.py b/backend/telemetry.py
+index 8a2acae..ac5dcf0 100644
+--- a/backend/telemetry.py
++++ b/backend/telemetry.py
+@@ -34,3 +34,21 @@ def estimate_cost(
+         usage.output_tokens
+     ) * settings.model_output_price_per_million / Decimal(1_000_000)
+     return float(cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
++
++
++def estimate_model_cost(
++    usage: TokenUsage,
++    input_price_per_million: Decimal | None,
++    output_price_per_million: Decimal | None,
++    *,
++    is_mock: bool,
++) -> float | None:
++    if is_mock:
++        return 0.0
++    if input_price_per_million is None or output_price_per_million is None:
++        return None
++    cost = (
++        Decimal(usage.input_tokens) * input_price_per_million
++        + Decimal(usage.output_tokens) * output_price_per_million
++    ) / Decimal(1_000_000)
++    return float(cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+diff --git a/backend/tests/test_provider_selection.py b/backend/tests/test_provider_selection.py
+new file mode 100644
+index 0000000..93c3d61
+--- /dev/null
++++ b/backend/tests/test_provider_selection.py
+@@ -0,0 +1,105 @@
++from decimal import Decimal
++
++from backend.main import create_app
++from backend.providers.mock import MockLLMProvider
++from backend.providers.registry import (
++    ModelRegistration,
++    ProviderRegistration,
++    ProviderRegistry,
++)
++from backend.tests.helpers import make_settings
++from backend.tests.test_api import client_for, valid_request
++
++
++def registry() -> ProviderRegistry:
++    provider = MockLLMProvider(delays_enabled=False)
++    return ProviderRegistry(
++        (
++            ProviderRegistration(
++                "safe",
++                "Safe Provider",
++                (
++                    ModelRegistration(
++                        "one", "Model One", provider, Decimal("1"), Decimal("2")
++                    ),
++                    ModelRegistration(
++                        "free", "Free Model", provider, Decimal("0"), Decimal("0")
++                    ),
++                ),
++            ),
++        ),
++        legacy_selection=("safe", "one"),
++    )
++
++
++async def test_catalog_is_safe_and_selection_is_persisted() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++        provider_registry=registry(),
++    )
++    async with await client_for(app) as client:
++        catalog = await client.get("/api/providers")
++        created = await client.post(
++            "/api/runs", json=valid_request(provider_id="safe", model_id="free")
++        )
++        snapshot = await client.get(f"/api/runs/{created.json()['run_id']}")
++    assert catalog.json() == {
++        "providers": [
++            {
++                "provider_id": "safe",
++                "provider_display_name": "Safe Provider",
++                "models": [
++                    {
++                        "model_id": "one",
++                        "model_display_name": "Model One",
++                        "capabilities": None,
++                    },
++                    {
++                        "model_id": "free",
++                        "model_display_name": "Free Model",
++                        "capabilities": None,
++                    },
++                ],
++            }
++        ]
++    }
++    assert "price" not in catalog.text.lower()
++    assert snapshot.json()["provider_display_name"] == "Safe Provider"
++    assert snapshot.json()["model_display_name"] == "Free Model"
++
++
++async def test_invalid_and_partial_selections_do_not_create_runs() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++        provider_registry=registry(),
++    )
++    async with await client_for(app) as client:
++        unknown = await client.post(
++            "/api/runs", json=valid_request(provider_id="missing", model_id="one")
++        )
++        mismatch = await client.post(
++            "/api/runs", json=valid_request(provider_id="safe", model_id="missing")
++        )
++        partial = await client.post("/api/runs", json=valid_request(provider_id="safe"))
++        listing = await client.get("/api/runs")
++    assert (unknown.status_code, mismatch.status_code, partial.status_code) == (
++        422,
++        422,
++        422,
++    )
++    assert listing.json()["total"] == 0
++
++
++async def test_legacy_request_resolves_concrete_selection() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++        provider_registry=registry(),
++    )
++    async with await client_for(app) as client:
++        created = await client.post("/api/runs", json=valid_request())
++        snapshot = await client.get(f"/api/runs/{created.json()['run_id']}")
++    assert snapshot.json()["provider_id"] == "safe"
++    assert snapshot.json()["model_id"] == "one"
+diff --git a/backend/workflow.py b/backend/workflow.py
+index 471f024..5ba6fd6 100644
+--- a/backend/workflow.py
++++ b/backend/workflow.py
+@@ -113,6 +113,7 @@ class AgentWorkflow:
+ 
+     async def run(self, run_id: UUID) -> None:
+         try:
++            run_provider = await self.manager.provider_for_run(run_id)
+             await self.manager.commit(
+                 run_id,
+                 lambda state: setattr(state, "started_at", utc_now()),
+@@ -126,7 +127,7 @@ class AgentWorkflow:
+                         "max_iterations": (
+                             await self.manager.get_run(run_id)
+                         ).max_iterations,
+-                        "mock": self.manager.provider.is_mock,
++                        "mock": run_provider.is_mock,
+                     },
+                 },
+             )
+@@ -364,7 +365,8 @@ class AgentWorkflow:
+         attempt: int,
+         record: _AttemptRecord,
+     ) -> tuple[str, TokenUsage]:
+-        iterator = self.manager.provider.stream_prd(
++        provider = await self.manager.provider_for_run(run_id)
++        iterator = provider.stream_prd(
+             user_idea=state.user_idea,
+             target_audience=state.target_audience,
+             user_constraints=state.user_constraints,
+@@ -508,9 +510,10 @@ class AgentWorkflow:
+             role=role.value,
+         )
+         state = await self.manager.get_run(run_id)
++        provider = await self.manager.provider_for_run(run_id)
+ 
+         async def call() -> ProviderStructuredResult:
+-            return await self.manager.provider.generate_review(
++            return await provider.generate_review(
+                 role=role,
+                 prd=state.current_prd,
+                 iteration=state.current_iteration,
+@@ -595,9 +598,10 @@ class AgentWorkflow:
+             parsed = model.model_validate(result.value)  # type: ignore[attr-defined]
+             return result, parsed
+         except ValidationError as exc:
++            provider = await self.manager.provider_for_run(run_id)
+             repaired = await self._await_provider(
+                 run_id,
+-                self.manager.provider.repair_structured(
++                provider.repair_structured(
+                     kind=kind,
+                     raw_value=result.value,
+                     validation_error=str(exc),
+@@ -773,10 +777,11 @@ class AgentWorkflow:
+         state = await self.manager.get_run(run_id)
+         if state.latest_evaluation is None:
+             raise ValueError("Optimizer requires an evaluation")
++        provider = await self.manager.provider_for_run(run_id)
+ 
+         async def call() -> ProviderStructuredResult:
+             assert state.latest_evaluation is not None
+-            return await self.manager.provider.generate_revision_plan(
++            return await provider.generate_revision_plan(
+                 evaluation=state.latest_evaluation,
+                 iteration=state.current_iteration,
+                 user_override=state.pending_user_override,
+diff --git a/contracts/v1/create_run_request.json b/contracts/v1/create_run_request.json
+index ae68192..da786bb 100644
+--- a/contracts/v1/create_run_request.json
++++ b/contracts/v1/create_run_request.json
+@@ -3,5 +3,7 @@
+   "target_audience": "Podcast listeners and independent creators",
+   "user_constraints": "Focus on a mobile-first MVP",
+   "quality_threshold": 85,
+-  "max_iterations": 3
++  "max_iterations": 3,
++  "provider_id": "mock",
++  "model_id": "mock-default"
+ }
+diff --git a/contracts/v1/run_snapshot.json b/contracts/v1/run_snapshot.json
+index fc71551..7df0143 100644
+--- a/contracts/v1/run_snapshot.json
++++ b/contracts/v1/run_snapshot.json
+@@ -3,6 +3,10 @@
+   "user_idea": "Build a micro-subscription feature for a podcast app.",
+   "target_audience": "Podcast listeners and independent creators",
+   "user_constraints": "Focus on a mobile-first MVP",
++  "provider_id": "mock",
++  "provider_display_name": "Mock",
++  "model_id": "mock-default",
++  "model_display_name": "Mock Default",
+   "current_iteration": 1,
+   "max_iterations": 3,
+   "quality_threshold": 85,
+diff --git a/src/components/AgentDashboard.test.tsx b/src/components/AgentDashboard.test.tsx
+index 6ebb8ee..389ad0b 100644
+--- a/src/components/AgentDashboard.test.tsx
++++ b/src/components/AgentDashboard.test.tsx
+@@ -43,6 +43,21 @@ function apiFor(status: RunStatus): AgentApi {
+     resumeRun: vi.fn(),
+     cancelRun: vi.fn(),
+     health: vi.fn(),
++    getProviders: vi.fn().mockResolvedValue({
++      providers: [
++        {
++          provider_id: "mock",
++          provider_display_name: "Mock",
++          models: [
++            {
++              model_id: "mock-default",
++              model_display_name: "Mock Default",
++              capabilities: null,
++            },
++          ],
++        },
++      ],
++    }),
+     eventsUrl: (runId, afterSequence) =>
+       `http://api.test/${runId}?after_sequence=${afterSequence}`,
+   };
+@@ -84,6 +99,14 @@ describe("AgentDashboard state framework", () => {
+       screen.getByLabelText(/产品想法/),
+       "A detailed product workflow for independent creators",
+     );
++    await userEvent.selectOptions(
++      await screen.findByLabelText("Provider"),
++      "mock",
++    );
++    await userEvent.selectOptions(
++      screen.getByLabelText("Model"),
++      "mock-default",
++    );
+     await userEvent.click(
+       screen.getByRole("button", { name: /开始生成 PRD/i }),
+     );
+diff --git a/src/components/AgentDashboard.tsx b/src/components/AgentDashboard.tsx
+index 4f0a42b..28db833 100644
+--- a/src/components/AgentDashboard.tsx
++++ b/src/components/AgentDashboard.tsx
+@@ -319,6 +319,7 @@ export function AgentDashboard({
+                 <ProductIdeaForm
+                   isSubmitting={state.isCreating}
+                   onSubmit={controller.createRun}
++                  {...(api ? { api } : {})}
+                 />
+               </section>
+             ) : !snapshot || !state.status ? (
+@@ -374,6 +375,15 @@ export function AgentDashboard({
+                   <p className="mt-1 font-mono text-[10px] text-ink-faint">
+                     任务 {snapshot.run_id}
+                   </p>
++                  <p
++                    className="mt-1 text-xs text-ink-muted"
++                    data-testid="run-model"
++                  >
++                    {snapshot.provider_display_name &&
++                    snapshot.model_display_name
++                      ? `${snapshot.provider_display_name} / ${snapshot.model_display_name}`
++                      : "模型：旧版任务（信息未知）"}
++                  </p>
+                   {state.outcome && (
+                     <div className="mt-4">
+                       <OutcomePanel outcome={state.outcome} />
+diff --git a/src/components/ProductIdeaForm.tsx b/src/components/ProductIdeaForm.tsx
+index e20b9e2..c55013e 100644
+--- a/src/components/ProductIdeaForm.tsx
++++ b/src/components/ProductIdeaForm.tsx
+@@ -1,12 +1,15 @@
+ import { ArrowRight, Sparkles } from "lucide-react";
+-import { useState } from "react";
++import { useCallback, useEffect, useState } from "react";
+ import type { FormEvent } from "react";
+ 
+ import type { CreateRunRequest } from "../lib/types";
++import { HttpAgentApi, type AgentApi } from "../lib/api";
++import type { ProviderCatalogItem } from "../lib/types";
+ 
+ interface ProductIdeaFormProps {
+   isSubmitting: boolean;
+   onSubmit(request: CreateRunRequest): Promise<void>;
++  api?: AgentApi;
+ }
+ 
+ interface FormErrors {
+@@ -18,7 +21,9 @@ interface FormErrors {
+ export function ProductIdeaForm({
+   isSubmitting,
+   onSubmit,
++  api: suppliedApi,
+ }: ProductIdeaFormProps) {
++  const [api] = useState<AgentApi>(() => suppliedApi ?? new HttpAgentApi());
+   const [idea, setIdea] = useState("");
+   const [audience, setAudience] = useState("");
+   const [constraints, setConstraints] = useState("");
+@@ -26,6 +31,29 @@ export function ProductIdeaForm({
+   const [maxIterations, setMaxIterations] = useState(3);
+   const [errors, setErrors] = useState<FormErrors>({});
+   const [submittingLocally, setSubmittingLocally] = useState(false);
++  const [providers, setProviders] = useState<ProviderCatalogItem[] | null>(
++    null,
++  );
++  const [catalogError, setCatalogError] = useState(false);
++  const [providerId, setProviderId] = useState("");
++  const [modelId, setModelId] = useState("");
++  const loadCatalog = useCallback(async () => {
++    setCatalogError(false);
++    setProviders(null);
++    try {
++      if (!api.getProviders) throw new Error("Provider catalog is unavailable");
++      setProviders((await api.getProviders()).providers);
++    } catch {
++      setCatalogError(true);
++      setProviders([]);
++    }
++  }, [api]);
++  useEffect(() => {
++    void loadCatalog();
++  }, [loadCatalog]);
++  const selectedProvider = providers?.find(
++    (item) => item.provider_id === providerId,
++  );
+ 
+   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+     event.preventDefault();
+@@ -58,6 +86,8 @@ export function ProductIdeaForm({
+         user_constraints: constraints.trim() || null,
+         quality_threshold: qualityThreshold,
+         max_iterations: maxIterations,
++        provider_id: providerId,
++        model_id: modelId,
+       });
+     } finally {
+       setSubmittingLocally(false);
+@@ -164,10 +194,77 @@ export function ProductIdeaForm({
+         </div>
+       </details>
+ 
++      <div className="mt-5 grid gap-5 sm:grid-cols-2">
++        <label className="text-sm text-ink-muted">
++          Provider
++          <select
++            aria-label="Provider"
++            className="field mt-2"
++            value={providerId}
++            disabled={!providers?.length || catalogError}
++            onChange={(event) => {
++              setProviderId(event.target.value);
++              setModelId("");
++            }}
++          >
++            <option value="">请选择</option>
++            {providers?.map((item) => (
++              <option key={item.provider_id} value={item.provider_id}>
++                {item.provider_display_name}
++              </option>
++            ))}
++          </select>
++        </label>
++        <label className="text-sm text-ink-muted">
++          Model
++          <select
++            aria-label="Model"
++            className="field mt-2"
++            value={modelId}
++            disabled={!selectedProvider}
++            onChange={(event) => setModelId(event.target.value)}
++          >
++            <option value="">请选择</option>
++            {selectedProvider?.models.map((item) => (
++              <option key={item.model_id} value={item.model_id}>
++                {item.model_display_name}
++              </option>
++            ))}
++          </select>
++        </label>
++      </div>
++      {providers === null && (
++        <p role="status" className="mt-3 text-xs text-ink-muted">
++          正在加载模型列表…
++        </p>
++      )}
++      {providers?.length === 0 && !catalogError && (
++        <p role="status" className="mt-3 text-xs text-danger">
++          当前没有可用的 Provider 或 Model。
++        </p>
++      )}
++      {catalogError && (
++        <p role="alert" className="mt-3 text-xs text-danger">
++          模型列表加载失败。{" "}
++          <button
++            type="button"
++            className="underline"
++            onClick={() => void loadCatalog()}
++          >
++            重试
++          </button>
++        </p>
++      )}
++
+       <button
+         className="button-primary mt-5 w-full sm:w-auto"
+         type="submit"
+-        disabled={busy}
++        disabled={
++          busy ||
++          !providerId ||
++          !modelId ||
++          !selectedProvider?.models.some((item) => item.model_id === modelId)
++        }
+       >
+         {busy ? "正在创建任务…" : "开始生成 PRD"}
+         {!busy && <ArrowRight aria-hidden="true" size={16} />}
+diff --git a/src/components/components.test.tsx b/src/components/components.test.tsx
+index d002a94..fa1742e 100644
+--- a/src/components/components.test.tsx
++++ b/src/components/components.test.tsx
+@@ -26,10 +26,41 @@ function expectBasicAccessibility(container: HTMLElement) {
+ }
+ 
+ describe("ProductIdeaForm", () => {
++  const catalogApi = {
++    getProviders: vi
++      .fn()
++      .mockResolvedValue({
++        providers: [
++          {
++            provider_id: "mock",
++            provider_display_name: "Mock",
++            models: [
++              {
++                model_id: "mock-default",
++                model_display_name: "Mock Default",
++                capabilities: null,
++              },
++            ],
++          },
++        ],
++      }),
++  } as never;
+   it("blocks invalid input and shows the boundary message", async () => {
+     const submit = vi.fn().mockResolvedValue(undefined);
+     const { container } = render(
+-      <ProductIdeaForm isSubmitting={false} onSubmit={submit} />,
++      <ProductIdeaForm
++        isSubmitting={false}
++        onSubmit={submit}
++        api={catalogApi}
++      />,
++    );
++    await userEvent.selectOptions(
++      await screen.findByLabelText("Provider"),
++      "mock",
++    );
++    await userEvent.selectOptions(
++      screen.getByLabelText("Model"),
++      "mock-default",
+     );
+     await userEvent.click(
+       screen.getByRole("button", { name: /开始生成 PRD/i }),
+@@ -47,12 +78,26 @@ describe("ProductIdeaForm", () => {
+           release = resolve;
+         }),
+     );
+-    render(<ProductIdeaForm isSubmitting={false} onSubmit={submit} />);
++    render(
++      <ProductIdeaForm
++        isSubmitting={false}
++        onSubmit={submit}
++        api={catalogApi}
++      />,
++    );
+     await userEvent.type(
+       screen.getByLabelText(/产品想法/),
+       "A detailed podcast subscription experience",
+     );
+     await userEvent.type(screen.getByLabelText(/目标用户/), "  Fans  ");
++    await userEvent.selectOptions(
++      await screen.findByLabelText("Provider"),
++      "mock",
++    );
++    await userEvent.selectOptions(
++      screen.getByLabelText("Model"),
++      "mock-default",
++    );
+     const button = screen.getByRole("button", { name: /开始生成 PRD/i });
+     await userEvent.click(button);
+     await userEvent.click(button);
+diff --git a/src/lib/api.ts b/src/lib/api.ts
+index 3f050ce..3e02ae8 100644
+--- a/src/lib/api.ts
++++ b/src/lib/api.ts
+@@ -12,6 +12,7 @@ import type {
+   ResumeRunRequest,
+   RunListResponse,
+   RunSnapshot,
++  ProviderCatalogResponse,
+   RunStatus,
+ } from "./types";
+ 
+@@ -41,6 +42,7 @@ export interface AgentApi {
+   resumeRun(runId: string, request: ResumeRunRequest): Promise<ControlResponse>;
+   cancelRun(runId: string): Promise<ControlResponse>;
+   health(): Promise<HealthResponse>;
++  getProviders?(): Promise<ProviderCatalogResponse>;
+   eventsUrl(runId: string, afterSequence: number): string;
+ }
+ 
+@@ -157,6 +159,14 @@ export class HttpAgentApi implements AgentApi {
+     return this.request("/api/health", undefined, parseHealthResponse);
+   }
+ 
++  getProviders(): Promise<ProviderCatalogResponse> {
++    return this.request("/api/providers", undefined, (value) => {
++      if (!isRecord(value) || !Array.isArray(value.providers))
++        throw new TypeError("Invalid provider catalog");
++      return value as unknown as ProviderCatalogResponse;
++    });
++  }
++
+   eventsUrl(runId: string, afterSequence: number): string {
+     const url = new URL(
+       `/api/runs/${encodeURIComponent(runId)}/events`,
+diff --git a/src/lib/types.ts b/src/lib/types.ts
+index 69f9f78..8bf5cfb 100644
+--- a/src/lib/types.ts
++++ b/src/lib/types.ts
+@@ -69,6 +69,22 @@ export interface CreateRunRequest {
+   user_constraints?: string | null;
+   quality_threshold: number;
+   max_iterations: number;
++  provider_id?: string;
++  model_id?: string;
++}
++
++export interface ModelCatalogItem {
++  model_id: string;
++  model_display_name: string;
++  capabilities: Record<string, unknown> | null;
++}
++export interface ProviderCatalogItem {
++  provider_id: string;
++  provider_display_name: string;
++  models: ModelCatalogItem[];
++}
++export interface ProviderCatalogResponse {
++  providers: ProviderCatalogItem[];
+ }
+ 
+ export interface ResumeRunRequest {
+@@ -164,6 +180,10 @@ export interface RunSnapshot {
+   user_idea: string;
+   target_audience?: string | null;
+   user_constraints?: string | null;
++  provider_id?: string | null;
++  provider_display_name?: string | null;
++  model_id?: string | null;
++  model_display_name?: string | null;
+   output_language?: string;
+   current_iteration: number;
+   max_iterations: number;

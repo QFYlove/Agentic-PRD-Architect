@@ -1,9 +1,8 @@
 # Benchmark Environment
 
-Last updated: 2026-09-09
+Last updated: 2026-09-10
 
-> This file records static execution environment information.
-> Per-run measurements such as duration, context usage and cost are stored in `metrics.csv`.
+> This file records stable/reference execution-environment information. Per-run measurements such as duration, context usage, cost, completion status, and observed runtime deviations belong in `metrics.csv` and the round report.
 
 ## Baseline
 
@@ -14,9 +13,11 @@ Commit: `0edc069`
 
 ### Claude Code
 
-- Version: 2.1.251.1
+- Reference/frozen Round 2 configuration version: 2.1.251.1
+- Round 2 observed installed version: 2.1.258.1
 - Model: Opus 5
 - Interface: CLI
+- Reasoning: not exposed / unknown
 
 ### Codex
 
@@ -24,6 +25,9 @@ Commit: `0edc069`
 - Model: GPT-5.6 Sol
 - Interface: Codex CLI
 - Provider: internal OpenAI-compatible gateway
+- Reasoning: not exposed / unknown
+
+Round 2 operational note: permission mode was changed from Ask to “Approve for me” during execution. This was treated as an operational runtime deviation, not a semantic manual intervention.
 
 ### Kimi Code — K2.6
 
@@ -31,6 +35,7 @@ Commit: `0edc069`
 - Model: Kimi K2.6
 - Interface: CLI
 - Provider: internal OpenAI-compatible gateway
+- Reasoning: not exposed / unknown
 
 ### Kimi Code — K3
 
@@ -44,5 +49,18 @@ Commit: `0edc069`
 
 ### Cursor
 
+- Version: unknown
 - Model: Grok 4.6 Medium
 - Interface: Cursor Coding Agent
+- Provider: Cursor
+- Reasoning: Medium
+
+## Round 2 Operator-Evaluator Environment Notes
+
+The uniform Playwright evaluation exposed a shared baseline/configuration path issue on Cursor baseline, Codex, Claude, and K3:
+
+`.venvScriptspython.exe: command not found`
+
+Those Playwright results are recorded as evaluator `infra_error`, not implementation failures.
+
+The Cursor worktree initially lacked local evaluation dependencies. Temporary symlinks to an existing evaluator `.venv` and `node_modules` were used only to execute the same read-only gate set against the unchanged baseline worktree. The symlinks were removed afterward and did not count toward Cursor's code delta.

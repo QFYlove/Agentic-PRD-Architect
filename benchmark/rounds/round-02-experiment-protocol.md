@@ -8,7 +8,7 @@ Baseline tag: `ai-coding-benchmark-v1`
 Baseline commit: `0edc069`
 
 Canonical spec SHA-256: `4c6c7bc167262b80c1957362fe818934b4ff9e5a54e0fe2892e46b7184fd8a68`
-Exact implementation prompt SHA-256: `6964fefd330cd03e936a67623baf454c27ebf6a3dc314cbbcda470556b8891a0`
+Exact implementation prompt SHA-256: `c6ad086d4d153d5f55c4e85ef12b3f83abbc0966e3469b16574c4c7fd5ec1446`
 
 ## 1. Objective
 
@@ -36,7 +36,7 @@ Round 2 freezes three inputs before the first implementation run:
 2. Canonical specification: `benchmark/specs/round-02-canonical-spec.md`.
 3. Exact implementation prompt: `benchmark/prompts/round-02-implementation.md`.
 
-All systems receive the same implementation prompt content. The canonical specification is embedded verbatim in that prompt.
+All systems receive the same implementation prompt content. The prompt embeds a semantically equivalent Chinese translation of the frozen canonical specification; the standalone canonical specification identified by the SHA-256 above remains authoritative.
 
 After the first valid Round 2 run starts, do not materially change the spec or prompt. A material requirement change requires a new round/sub-round or rerunning every system.
 

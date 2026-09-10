@@ -1,0 +1,3103 @@
+diff --git a/backend/config.py b/backend/config.py
+index 14a7aa6..e51931a 100644
+--- a/backend/config.py
++++ b/backend/config.py
+@@ -4,10 +4,41 @@ from decimal import Decimal
+ from functools import lru_cache
+ from typing import Annotated, Literal, Self
+ 
+-from pydantic import Field, SecretStr, field_validator, model_validator
++from pydantic import (
++    BaseModel,
++    ConfigDict,
++    Field,
++    SecretStr,
++    field_validator,
++    model_validator,
++)
+ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+ 
+ 
++class ModelPricing(BaseModel):
++    """Per-million-token prices for one specific model.
++
++    Scoped to a single model rather than to a provider or to the whole app: two
++    models behind the same endpoint bill at different rates, so a provider-wide
++    number would report a cheap model's spend at an expensive model's price. A
++    model with no entry here has *unknown* pricing, which stays unknown -- see
++    ``estimate_cost`` -- because a guessed cost reads exactly like a real one.
++
++    An explicitly configured ``0`` is a real price and is kept distinguishable
++    from a missing entry: the former yields a cost of ``0``, the latter ``None``.
++    """
++
++    model_config = ConfigDict(extra="forbid", frozen=True)
++
++    input_per_million: Decimal = Field(ge=0)
++    output_per_million: Decimal = Field(ge=0)
++
++
++def pricing_key(provider_id: str, model_id: str) -> str:
++    """The ``MODEL_PRICES`` key for one provider/model pair."""
++    return f"{provider_id}/{model_id}"
++
++
+ class Settings(BaseSettings):
+     """Validated application configuration loaded from environment variables."""
+ 
+@@ -48,6 +79,15 @@ class Settings(BaseSettings):
+     glm_model: str = "glm-5.2"
+     model_input_price_per_million: Decimal | None = Field(default=None, ge=0)
+     model_output_price_per_million: Decimal | None = Field(default=None, ge=0)
++    model_prices: dict[str, ModelPricing] = Field(default_factory=dict)
++    """Per-model prices, keyed ``"<provider_id>/<model_id>"``.
++
++    Set as JSON in ``MODEL_PRICES``. The pair of flat price fields above predates
++    run-level model selection and still works, but it only ever described the one
++    model the whole app was pinned to, so it applies to the default combination
++    alone -- never to a model the user picked, whose price would otherwise be
++    read off an unrelated model's rate.
++    """
+ 
+     mock_delays_enabled: bool = True
+     mock_chunk_size: int = Field(default=72, ge=1, le=10_000)
+@@ -101,6 +141,20 @@ class Settings(BaseSettings):
+                 raise ValueError(f"Invalid frontend origin: {origin}")
+         return value
+ 
++    @field_validator("model_prices")
++    @classmethod
++    def validate_model_prices(
++        cls,
++        value: dict[str, ModelPricing],
++    ) -> dict[str, ModelPricing]:
++        for key in value:
++            provider_id, separator, model_id = key.partition("/")
++            if not separator or not provider_id.strip() or not model_id.strip():
++                raise ValueError(
++                    "MODEL_PRICES keys must look like '<provider_id>/<model_id>'"
++                )
++        return value
++
+     @model_validator(mode="after")
+     def validate_provider_configuration(self) -> Self:
+         if self.e2e_test_mode and self.app_env != "test":
+@@ -137,6 +191,43 @@ class Settings(BaseSettings):
+             and self.model_output_price_per_million is not None
+         )
+ 
++    @property
++    def legacy_model_pricing(self) -> ModelPricing | None:
++        """The flat price pair, if configured, as a model-scoped price.
++
++        Only the default combination may use it: it was written when one model
++        was pinned for the whole process, so applying it to any other model would
++        bill that model at a rate nobody configured for it.
++        """
++        if not self.has_model_pricing:
++            return None
++        assert self.model_input_price_per_million is not None
++        assert self.model_output_price_per_million is not None
++        return ModelPricing(
++            input_per_million=self.model_input_price_per_million,
++            output_per_million=self.model_output_price_per_million,
++        )
++
++    @property
++    def default_model_id(self) -> str:
++        """The model the flat provider configuration points at."""
++        return (
++            self.deepseek_model if self.llm_provider == "deepseek" else self.glm_model
++        )
++
++    def pricing_for(self, provider_id: str, model_id: str) -> ModelPricing | None:
++        """The price of exactly this model, or ``None`` when it is unknown.
++
++        Never falls back to another model's price, and never invents a zero: an
++        unpriced model reports an unavailable cost instead of a cheap one.
++        """
++        pricing = self.model_prices.get(pricing_key(provider_id, model_id))
++        if pricing is not None:
++            return pricing
++        if provider_id == self.llm_provider and model_id == self.default_model_id:
++            return self.legacy_model_pricing
++        return None
++
+ 
+ @lru_cache
+ def get_settings() -> Settings:
+diff --git a/backend/errors.py b/backend/errors.py
+index b438504..6c4822c 100644
+--- a/backend/errors.py
++++ b/backend/errors.py
+@@ -160,3 +160,84 @@ class ProviderUnavailableError(AppError):
+             "The configured LLM provider is not available.",
+             503,
+         )
++
++
++class ProviderCatalogUnavailableError(AppError):
++    """The selectable provider/model catalog could not be built.
++
++    Raised instead of returning a default or partial catalog: a caller shown a
++    fabricated list would pick from models the backend cannot actually run.
++    """
++
++    def __init__(self) -> None:
++        super().__init__(
++            "PROVIDER_CATALOG_UNAVAILABLE",
++            "The provider catalog could not be loaded.",
++            503,
++        )
++
++
++class ProviderSelectionError(AppError):
++    """A run-level provider/model selection the backend refuses to accept.
++
++    Always a 4xx with a fixed message: the request's own identifiers are never
++    echoed back, so a probe cannot use the error text to enumerate configuration.
++    Never resolved by substituting a different provider or model.
++    """
++
++    def __init__(self, code: str, message: str) -> None:
++        super().__init__(code, message, 422)
++
++
++class UnknownProviderError(ProviderSelectionError):
++    def __init__(self) -> None:
++        super().__init__(
++            "PROVIDER_ID_UNKNOWN",
++            "The requested provider is not part of the selectable catalog.",
++        )
++
++
++class UnknownModelError(ProviderSelectionError):
++    def __init__(self) -> None:
++        super().__init__(
++            "MODEL_ID_UNKNOWN",
++            "The requested model is not part of the selectable catalog.",
++        )
++
++
++class ModelProviderMismatchError(ProviderSelectionError):
++    def __init__(self) -> None:
++        super().__init__(
++            "MODEL_PROVIDER_MISMATCH",
++            "The requested model belongs to a different provider.",
++        )
++
++
++class SelectionUnavailableError(ProviderSelectionError):
++    def __init__(self) -> None:
++        super().__init__(
++            "PROVIDER_MODEL_UNAVAILABLE",
++            "The requested provider and model combination is not selectable.",
++        )
++
++
++class IncompleteSelectionError(ProviderSelectionError):
++    def __init__(self) -> None:
++        super().__init__(
++            "PROVIDER_SELECTION_INCOMPLETE",
++            "A provider and a model must be selected together.",
++        )
++
++
++class ProviderSelectionUnresolvableError(ProviderError):
++    """A run's persisted selection no longer exists in the backend catalog.
++
++    A ``ProviderError`` rather than an ``AppError``: it surfaces while a run is
++    executing, so the workflow fails that run with this stable code instead of
++    quietly continuing on some other provider. The run's recorded identifiers and
++    display names stay readable either way.
++    """
++
++    code = "PROVIDER_SELECTION_UNAVAILABLE"
++    retryable = False
++    user_message = "The provider and model recorded for this run are unavailable."
+diff --git a/backend/main.py b/backend/main.py
+index ffed52a..160a22c 100644
+--- a/backend/main.py
++++ b/backend/main.py
+@@ -18,12 +18,11 @@ from pydantic.json_schema import models_json_schema
+ from sse_starlette.sse import EventSourceResponse
+ 
+ from backend.config import Settings, get_settings
+-from backend.errors import AppError, ProviderUnavailableError
++from backend.errors import AppError
+ from backend.event_store import EventStore, SQLiteEventStore
+ from backend.observability import log_event
+ from backend.providers.base import LLMProvider
+-from backend.providers.compatible import OpenAICompatibleLLMProvider
+-from backend.providers.mock import MockLLMProvider
++from backend.providers.catalog import ProviderCatalog
+ from backend.providers.scenario import ScenarioController, ScenarioMockLLMProvider
+ from backend.run_manager import RunManager
+ from backend.run_store import InMemoryRunStore, SQLiteRunStore
+@@ -36,6 +35,7 @@ from backend.schemas import (
+     EvaluationResult,
+     HealthResponse,
+     PRDVersion,
++    ProviderCatalogResponse,
+     ResumeRunRequest,
+     RevisionPlan,
+     RoleReview,
+@@ -89,49 +89,25 @@ def create_app(
+ ) -> FastAPI:
+     app_settings = settings or get_settings()
+     scenario_controller: ScenarioController | None = None
+-    if provider is None:
+-        if app_settings.enable_mock_llm:
+-            if app_settings.e2e_test_mode:
+-                scenario_controller = ScenarioController()
+-                provider = ScenarioMockLLMProvider(
+-                    controller=scenario_controller,
+-                    timeout_delay=app_settings.generator_timeout_seconds + 0.5,
+-                    delays_enabled=app_settings.mock_delays_enabled,
+-                    chunk_size=app_settings.mock_chunk_size,
+-                    generator_delay=app_settings.mock_generator_delay_seconds,
+-                    reviewer_delay=app_settings.mock_reviewer_delay_seconds,
+-                    optimizer_delay=app_settings.mock_optimizer_delay_seconds,
+-                    reviewer_stagger=0.4,
+-                )
+-            else:
+-                provider = MockLLMProvider(
+-                    delays_enabled=app_settings.mock_delays_enabled,
+-                    chunk_size=app_settings.mock_chunk_size,
+-                    generator_delay=app_settings.mock_generator_delay_seconds,
+-                    reviewer_delay=app_settings.mock_reviewer_delay_seconds,
+-                    optimizer_delay=app_settings.mock_optimizer_delay_seconds,
+-                )
+-        else:
+-            if app_settings.llm_provider == "deepseek":
+-                api_key = app_settings.deepseek_api_key
+-                base_url = app_settings.deepseek_base_url
+-                model = app_settings.deepseek_model
+-            else:
+-                api_key = app_settings.glm_api_key
+-                base_url = app_settings.glm_base_url
+-                model = app_settings.glm_model
+-            extra_body: dict[str, object] = {"thinking": {"type": "disabled"}}
+-            if api_key is None:
+-                raise ProviderUnavailableError
+-            provider = OpenAICompatibleLLMProvider(
+-                provider_name=app_settings.llm_provider,
+-                api_key=api_key.get_secret_value(),
+-                base_url=base_url,
+-                model=model,
+-                request_timeout_seconds=app_settings.llm_request_timeout_seconds,
+-                max_output_tokens=app_settings.llm_max_output_tokens,
+-                extra_body=extra_body,
+-            )
++    if provider is None and app_settings.enable_mock_llm and app_settings.e2e_test_mode:
++        # The E2E scenario mock is one shared, controllable instance on purpose,
++        # so it stays the provider for every catalog entry rather than each
++        # selection getting its own uncontrolled copy.
++        scenario_controller = ScenarioController()
++        provider = ScenarioMockLLMProvider(
++            controller=scenario_controller,
++            timeout_delay=app_settings.generator_timeout_seconds + 0.5,
++            delays_enabled=app_settings.mock_delays_enabled,
++            chunk_size=app_settings.mock_chunk_size,
++            generator_delay=app_settings.mock_generator_delay_seconds,
++            reviewer_delay=app_settings.mock_reviewer_delay_seconds,
++            optimizer_delay=app_settings.mock_optimizer_delay_seconds,
++            reviewer_stagger=0.4,
++        )
++    catalog = ProviderCatalog(app_settings, provider_override=provider)
++    # Checked at startup, as before, so a process configured with nothing runnable
++    # fails here instead of at the first create-run request.
++    catalog.default_selection()
+     if app_settings.database_path == ":memory:":
+         run_store = InMemoryRunStore(
+             max_runs=app_settings.max_retained_runs,
+@@ -155,7 +131,7 @@ def create_app(
+         )
+     manager = RunManager(
+         settings=app_settings,
+-        provider=provider,
++        catalog=catalog,
+         run_store=run_store,
+         event_store=event_store,
+     )
+@@ -246,9 +222,22 @@ def create_app(
+         return HealthResponse(
+             status="ok",
+             mock_mode=app_settings.enable_mock_llm,
+-            provider="mock" if provider.is_mock else app_settings.llm_provider,
++            provider=("mock" if catalog.default_is_mock else app_settings.llm_provider),
+         )
+ 
++    @application.get(
++        "/api/providers",
++        response_model=ProviderCatalogResponse,
++        tags=["providers"],
++    )
++    async def list_providers() -> ProviderCatalogResponse:
++        """The read-only catalog of combinations a run may be created on.
++
++        Built from backend configuration, so the frontend never keeps a second
++        authoritative list, and carrying no credentials, endpoints, or prices.
++        """
++        return manager.list_providers()
++
+     if scenario_controller is not None:
+ 
+         @application.put("/api/test/scenario", tags=["test"])
+@@ -405,6 +394,7 @@ def create_app(
+         CreateRunResponse,
+         ResumeRunRequest,
+         ControlResponse,
++        ProviderCatalogResponse,
+         RoleReview,
+         EvaluationResult,
+         RevisionPlan,
+diff --git a/backend/providers/catalog.py b/backend/providers/catalog.py
+new file mode 100644
+index 0000000..0759565
+--- /dev/null
++++ b/backend/providers/catalog.py
+@@ -0,0 +1,376 @@
++"""The backend-owned catalog of provider/model combinations a run may use.
++
++Everything selectable is derived from validated backend configuration here, so
++the frontend has no second authoritative list to drift from, and a caller can
++only ever ask for a combination this process is actually configured to run.
++
++Two things are kept structurally separate:
++
++* ``ProviderDefinition`` / ``ModelDefinition`` hold only safe, public data -- the
++  identifiers and display names the API is allowed to serialize.
++* the credentials and endpoints needed to *execute* a selection are read from
++  ``Settings`` inside the provider factory and never stored on a definition.
++
++That separation is the reason a catalog response cannot leak an API key: there is
++no key on the objects the response is built from.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Callable, Sequence
++from dataclasses import dataclass
++from typing import Any
++
++from backend.config import ModelPricing, Settings
++from backend.errors import (
++    AppError,
++    IncompleteSelectionError,
++    ModelProviderMismatchError,
++    ProviderCatalogUnavailableError,
++    ProviderUnavailableError,
++    SelectionUnavailableError,
++    UnknownModelError,
++    UnknownProviderError,
++)
++from backend.providers.base import LLMProvider
++from backend.providers.compatible import OpenAICompatibleLLMProvider
++from backend.providers.mock import MockLLMProvider
++from backend.schemas import (
++    ModelOption,
++    ProviderCatalogResponse,
++    ProviderOption,
++)
++
++MOCK_PROVIDER_ID = "mock"
++MOCK_STANDARD_MODEL_ID = "mock-standard"
++MOCK_FAST_MODEL_ID = "mock-fast"
++
++#: Public, non-sensitive metadata only. No prices, no endpoints, no credentials.
++_MOCK_CAPABILITIES: dict[str, Any] = {
++    "streaming": True,
++    "structured_output": True,
++    "deterministic": True,
++}
++_HOSTED_CAPABILITIES: dict[str, Any] = {
++    "streaming": True,
++    "structured_output": True,
++    "deterministic": False,
++}
++
++
++@dataclass(frozen=True)
++class ModelDefinition:
++    """One model, described only by what is safe to publish."""
++
++    model_id: str
++    display_name: str
++    capabilities: dict[str, Any] | None = None
++    available: bool = True
++    """Whether this model can be selected right now.
++
++    A known-but-unavailable entry is deliberately not the same as an unknown one:
++    it stays out of the catalog response, and an explicit request for it is
++    refused as unavailable rather than as a typo.
++    """
++
++
++@dataclass(frozen=True)
++class ProviderDefinition:
++    provider_id: str
++    display_name: str
++    models: tuple[ModelDefinition, ...] = ()
++    available: bool = True
++
++    def find(self, model_id: str) -> ModelDefinition | None:
++        for model in self.models:
++            if model.model_id == model_id:
++                return model
++        return None
++
++
++@dataclass(frozen=True)
++class ResolvedSelection:
++    """A validated combination, plus the creation-time facts a run records."""
++
++    provider_id: str
++    provider_display_name: str
++    model_id: str
++    model_display_name: str
++    pricing: ModelPricing | None = None
++
++
++CatalogLoader = Callable[[Settings], Sequence[ProviderDefinition]]
++ProviderFactory = Callable[
++    [Settings, ProviderDefinition, ModelDefinition],
++    LLMProvider,
++]
++
++
++def build_provider_definitions(settings: Settings) -> tuple[ProviderDefinition, ...]:
++    """The selectable catalog implied by the current configuration.
++
++    Mock mode and hosted mode are disjoint: running a mock selection against a
++    hosted key, or a hosted selection through the deterministic mock, would make
++    the recorded provider a lie about what produced the document.
++    """
++    if settings.enable_mock_llm:
++        return (
++            ProviderDefinition(
++                provider_id=MOCK_PROVIDER_ID,
++                display_name="Mock（本地模拟）",
++                models=(
++                    ModelDefinition(
++                        model_id=MOCK_STANDARD_MODEL_ID,
++                        display_name="Mock 标准模型",
++                        capabilities=dict(_MOCK_CAPABILITIES),
++                    ),
++                    ModelDefinition(
++                        model_id=MOCK_FAST_MODEL_ID,
++                        display_name="Mock 快速模型",
++                        capabilities={**_MOCK_CAPABILITIES, "latency": "low"},
++                    ),
++                ),
++            ),
++        )
++    return (
++        ProviderDefinition(
++            provider_id="deepseek",
++            display_name="DeepSeek",
++            models=(
++                ModelDefinition(
++                    model_id=settings.deepseek_model,
++                    # The configured identifier is the only name the backend
++                    # knows for it; inventing a prettier one would misreport
++                    # which model actually ran.
++                    display_name=settings.deepseek_model,
++                    capabilities=dict(_HOSTED_CAPABILITIES),
++                ),
++            ),
++            available=settings.deepseek_api_key is not None,
++        ),
++        ProviderDefinition(
++            provider_id="glm",
++            display_name="智谱 GLM",
++            models=(
++                ModelDefinition(
++                    model_id=settings.glm_model,
++                    display_name=settings.glm_model,
++                    capabilities=dict(_HOSTED_CAPABILITIES),
++                ),
++            ),
++            available=settings.glm_api_key is not None,
++        ),
++    )
++
++
++def build_provider(
++    settings: Settings,
++    definition: ProviderDefinition,
++    model: ModelDefinition,
++) -> LLMProvider:
++    """Construct the client one resolved combination executes through."""
++    if definition.provider_id == MOCK_PROVIDER_ID:
++        return MockLLMProvider(
++            # The two mock models differ only in pacing: same deterministic
++            # document, same reviews, so a run's output never depends on which
++            # one was picked while the selection still has a visible effect.
++            delays_enabled=(
++                settings.mock_delays_enabled and model.model_id != MOCK_FAST_MODEL_ID
++            ),
++            chunk_size=settings.mock_chunk_size,
++            generator_delay=settings.mock_generator_delay_seconds,
++            reviewer_delay=settings.mock_reviewer_delay_seconds,
++            optimizer_delay=settings.mock_optimizer_delay_seconds,
++        )
++    if definition.provider_id == "deepseek":
++        api_key = settings.deepseek_api_key
++        base_url = settings.deepseek_base_url
++    elif definition.provider_id == "glm":
++        api_key = settings.glm_api_key
++        base_url = settings.glm_base_url
++    else:
++        raise ProviderUnavailableError
++    if api_key is None:
++        raise ProviderUnavailableError
++    return OpenAICompatibleLLMProvider(
++        provider_name=definition.provider_id,
++        api_key=api_key.get_secret_value(),
++        base_url=base_url,
++        model=model.model_id,
++        request_timeout_seconds=settings.llm_request_timeout_seconds,
++        max_output_tokens=settings.llm_max_output_tokens,
++        extra_body={"thinking": {"type": "disabled"}},
++    )
++
++
++class ProviderCatalog:
++    """Read-only catalog plus the resolution rules for a run's selection.
++
++    Shared across runs on purpose -- it holds no "currently selected" state. What
++    a run executes on lives on that run (see ``RunManager``), so two concurrent
++    runs on different combinations cannot influence each other through here.
++    """
++
++    def __init__(
++        self,
++        settings: Settings,
++        *,
++        provider_override: LLMProvider | None = None,
++        loader: CatalogLoader | None = None,
++        factory: ProviderFactory | None = None,
++    ) -> None:
++        self.settings = settings
++        #: An explicitly injected provider (tests, and the E2E scenario mock).
++        #: It answers for every entry so that selection stays real -- validation,
++        #: persistence and binding all still happen -- without the catalog having
++        #: to build a second client for a caller that already supplied one.
++        self._override = provider_override
++        self._loader = loader or build_provider_definitions
++        self._factory = factory or build_provider
++        self._definitions: tuple[ProviderDefinition, ...] | None = None
++        self._instances: dict[tuple[str, str], LLMProvider] = {}
++
++    def definitions(self) -> tuple[ProviderDefinition, ...]:
++        """Every known entry, including the ones that are not selectable.
++
++        A configuration or load failure surfaces as
++        ``PROVIDER_CATALOG_UNAVAILABLE`` rather than as an empty or partial
++        catalog: a caller shown a fabricated list would pick a combination this
++        backend cannot run.
++        """
++        if self._definitions is None:
++            try:
++                self._definitions = tuple(self._loader(self.settings))
++            except AppError:
++                raise
++            except Exception as exc:
++                raise ProviderCatalogUnavailableError from exc
++        return self._definitions
++
++    def to_response(self) -> ProviderCatalogResponse:
++        """The safe, public catalog: only combinations selectable right now."""
++        options: list[ProviderOption] = []
++        for definition in self.definitions():
++            if not definition.available:
++                continue
++            models = [
++                ModelOption(
++                    model_id=model.model_id,
++                    model_display_name=model.display_name,
++                    capabilities=(
++                        dict(model.capabilities)
++                        if model.capabilities is not None
++                        else None
++                    ),
++                )
++                for model in definition.models
++                if model.available
++            ]
++            if not models:
++                continue
++            options.append(
++                ProviderOption(
++                    provider_id=definition.provider_id,
++                    provider_display_name=definition.display_name,
++                    models=models,
++                )
++            )
++        return ProviderCatalogResponse(providers=options)
++
++    def resolve(self, provider_id: str, model_id: str) -> ResolvedSelection:
++        """Validate an explicit combination, or refuse it. Never substitutes."""
++        definitions = self.definitions()
++        definition = next(
++            (item for item in definitions if item.provider_id == provider_id),
++            None,
++        )
++        if definition is None:
++            raise UnknownProviderError
++        model = definition.find(model_id)
++        if model is None:
++            # "Belongs to another provider" and "does not exist" are different
++            # mistakes, and the second one should not be reported as the first.
++            if any(other.find(model_id) is not None for other in definitions):
++                raise ModelProviderMismatchError
++            raise UnknownModelError
++        if not definition.available or not model.available:
++            raise SelectionUnavailableError
++        return ResolvedSelection(
++            provider_id=definition.provider_id,
++            provider_display_name=definition.display_name,
++            model_id=model.model_id,
++            model_display_name=model.display_name,
++            pricing=self.settings.pricing_for(definition.provider_id, model.model_id),
++        )
++
++    def select(
++        self,
++        provider_id: str | None,
++        model_id: str | None,
++    ) -> ResolvedSelection:
++        """Resolve what a create-run request asked for.
++
++        Neither field is the legacy request shape and keeps the configured
++        default. Exactly one field is not a selection at all and is refused.
++        """
++        if provider_id is None and model_id is None:
++            return self.default_selection()
++        if provider_id is None or model_id is None:
++            raise IncompleteSelectionError
++        return self.resolve(provider_id, model_id)
++
++    def default_selection(self) -> ResolvedSelection:
++        """The combination a request with no explicit selection resolves to.
++
++        Kept identical to the pre-selection behaviour: the provider the flat
++        configuration names, with its configured model. Resolved to a concrete
++        pair before the run starts, and failing loudly when the configuration
++        names nothing selectable.
++        """
++        default_provider_id = (
++            MOCK_PROVIDER_ID
++            if self.settings.enable_mock_llm
++            else self.settings.llm_provider
++        )
++        for definition in self.definitions():
++            if definition.provider_id != default_provider_id:
++                continue
++            if not definition.available:
++                continue
++            for model in definition.models:
++                if model.available:
++                    return self.resolve(definition.provider_id, model.model_id)
++        raise ProviderUnavailableError
++
++    def provider_for(self, selection: ResolvedSelection) -> LLMProvider:
++        """The client for one resolved combination, built at most once."""
++        if self._override is not None:
++            return self._override
++        key = (selection.provider_id, selection.model_id)
++        instance = self._instances.get(key)
++        if instance is None:
++            definition = next(
++                (
++                    item
++                    for item in self.definitions()
++                    if item.provider_id == selection.provider_id
++                ),
++                None,
++            )
++            model = definition.find(selection.model_id) if definition else None
++            if definition is None or model is None:
++                raise SelectionUnavailableError
++            instance = self._factory(self.settings, definition, model)
++            self._instances[key] = instance
++        return instance
++
++    @property
++    def default_is_mock(self) -> bool:
++        """Whether the configured default runs against the deterministic mock.
++
++        Only used for the process-level ``/api/health`` report, which predates
++        run-level selection and keeps its original meaning.
++        """
++        if self._override is not None:
++            return self._override.is_mock
++        return self.settings.enable_mock_llm
+diff --git a/backend/run_manager.py b/backend/run_manager.py
+index ef243e0..1e50c33 100644
+--- a/backend/run_manager.py
++++ b/backend/run_manager.py
+@@ -3,22 +3,30 @@ from __future__ import annotations
+ import asyncio
+ import logging
+ from collections.abc import AsyncIterator, Callable
++from dataclasses import dataclass
+ from time import monotonic
+ from typing import Any, Protocol
+ from uuid import UUID, uuid4
+ 
+-from backend.config import Settings
+-from backend.errors import RunCapacityError, RunConflictError
++from backend.config import ModelPricing, Settings
++from backend.errors import (
++    AppError,
++    ProviderSelectionUnresolvableError,
++    RunCapacityError,
++    RunConflictError,
++)
+ from backend.event_store import TRANSIENT_EVENT_TYPES, EventStore
+ from backend.language import detect_output_language
+ from backend.observability import log_event
+ from backend.providers.base import LLMProvider
++from backend.providers.catalog import ProviderCatalog, ResolvedSelection
+ from backend.run_store import InMemoryRunStore
+ from backend.schemas import (
+     CreateRunRequest,
+     NodeStatus,
+     NodeTiming,
+     PRDVersion,
++    ProviderCatalogResponse,
+     ResumeRunRequest,
+     RunEvent,
+     RunEventType,
+@@ -40,19 +48,37 @@ Mutation = Callable[[RunSnapshot], None]
+ LOGGER = logging.getLogger("agentic_prd.workflow")
+ 
+ 
++@dataclass(frozen=True)
++class RunBinding:
++    """What one run executes on, decided once and never reassigned.
++
++    Frozen, and stored per ``run_id``: there is deliberately no manager-wide
++    "current provider" for a second concurrent run to overwrite, so two runs on
++    different combinations cannot influence each other's execution.
++    """
++
++    selection: ResolvedSelection
++    provider: LLMProvider
++
++
+ class RunManager:
+     def __init__(
+         self,
+         *,
+         settings: Settings,
+-        provider: LLMProvider,
+         run_store: InMemoryRunStore,
+         event_store: EventStore,
++        provider: LLMProvider | None = None,
++        catalog: ProviderCatalog | None = None,
+     ) -> None:
+         self.settings = settings
+-        self.provider = provider
++        #: A caller-supplied provider still works and now answers for every
++        #: catalog entry, so selection stays real (validated, persisted, bound)
++        #: without a test or the E2E scenario mock having to build a catalog.
++        self.catalog = catalog or ProviderCatalog(settings, provider_override=provider)
+         self.run_store = run_store
+         self.event_store = event_store
++        self._bindings: dict[UUID, RunBinding] = {}
+         self.workflow: WorkflowRunner | None = None
+         self.tasks: dict[UUID, asyncio.Task[None]] = {}
+         self.cancel_signals: dict[UUID, asyncio.Event] = {}
+@@ -114,6 +140,7 @@ class RunManager:
+         self.event_store.remove_run(run_id)
+         self.cancel_signals.pop(run_id, None)
+         self.resume_signals.pop(run_id, None)
++        self._bindings.pop(run_id, None)
+         self._active_started.pop(run_id, None)
+         self._paused_started.pop(run_id, None)
+         self._paused_total.pop(run_id, None)
+@@ -121,9 +148,69 @@ class RunManager:
+             self._node_started.pop(key, None)
+         self.tasks.pop(run_id, None)
+ 
++    def list_providers(self) -> ProviderCatalogResponse:
++        """The safe catalog the create-run UI selects from."""
++        return self.catalog.to_response()
++
++    async def provider_for(self, run_id: UUID) -> LLMProvider:
++        """The client this run -- and only this run -- executes through.
++
++        Resolved once and then reused: a configuration change mid-run cannot
++        move a run onto a different model, and a run whose recorded selection has
++        since disappeared fails explicitly instead of continuing on something
++        else.
++        """
++        binding = self._bindings.get(run_id)
++        if binding is None:
++            binding = self._bind_persisted(await self.get_run(run_id))
++            self._bindings[run_id] = binding
++        return binding.provider
++
++    def _bind_persisted(self, state: RunSnapshot) -> RunBinding:
++        """Rebuild a binding from what the snapshot recorded.
++
++        Two cases, and neither of them substitutes: a snapshot that names a
++        combination must still resolve to that same combination, and a snapshot
++        from before run-level selection existed keeps the baseline default. The
++        recorded display names are never overwritten by what the catalog says
++        today -- a finished run has to keep describing what it actually used.
++        """
++        try:
++            if state.provider_id is not None and state.model_id is not None:
++                selection = self.catalog.resolve(state.provider_id, state.model_id)
++            else:
++                selection = self.catalog.default_selection()
++            provider = self.catalog.provider_for(selection)
++        except AppError as exc:
++            raise ProviderSelectionUnresolvableError from exc
++        return RunBinding(selection=selection, provider=provider)
++
++    def selection_label(self, run_id: UUID) -> str | None:
++        """The bound provider's identifier, for logs. Never a credential."""
++        binding = self._bindings.get(run_id)
++        return binding.selection.provider_id if binding is not None else None
++
++    def _pricing_for(self, state: RunSnapshot) -> ModelPricing | None:
++        """The price of the model this run is bound to, or ``None`` if unknown.
++
++        Read from the run's own binding, never from a process-wide default, so
++        one run's spend is never valued at another model's rate.
++        """
++        binding = self._bindings.get(state.run_id)
++        if binding is not None:
++            return binding.selection.pricing
++        if state.provider_id is not None and state.model_id is not None:
++            return self.settings.pricing_for(state.provider_id, state.model_id)
++        return None
++
+     async def create_run(self, request: CreateRunRequest) -> RunSnapshot:
+         if not self._accepting:
+             raise RunConflictError("APP_SHUTTING_DOWN", "The application is stopping.")
++        # Resolved before anything is written or evicted: a request naming a
++        # combination this backend cannot run must leave no trace at all, and
++        # retention eviction is not something an invalid request gets to trigger.
++        selection = self.catalog.select(request.provider_id, request.model_id)
++        provider = self.catalog.provider_for(selection)
+         async with self._create_lock:
+             if await self.run_store.active_count() >= self.settings.max_concurrent_runs:
+                 raise RunCapacityError
+@@ -137,6 +224,12 @@ class RunManager:
+                 user_idea=request.user_idea,
+                 target_audience=request.target_audience,
+                 user_constraints=request.user_constraints,
++                provider_id=selection.provider_id,
++                model_id=selection.model_id,
++                # Snapshotted, not re-resolved on read: renaming or removing a
++                # catalog entry later must not rewrite what this run reports.
++                provider_display_name=selection.provider_display_name,
++                model_display_name=selection.model_display_name,
+                 # Decided once, from the user's own words, so the generator, all
+                 # three reviewers, and the optimizer cannot each pick a different
+                 # language from their own slice of the input.
+@@ -155,11 +248,15 @@ class RunManager:
+                     "aggregator": NodeStatus.PENDING,
+                     "optimizer": NodeStatus.PENDING,
+                 },
+-                is_mock=self.provider.is_mock,
+-                cost_available=self.provider.is_mock or self.settings.has_model_pricing,
++                is_mock=provider.is_mock,
++                cost_available=provider.is_mock or selection.pricing is not None,
+                 created_at=now,
+                 updated_at=now,
+             )
++            self._bindings[run_id] = RunBinding(
++                selection=selection,
++                provider=provider,
++            )
+             await self.run_store.create(snapshot)
+             self.event_store.create_run(run_id)
+             self.cancel_signals[run_id] = asyncio.Event()
+@@ -171,8 +268,9 @@ class RunManager:
+             LOGGER,
+             "run_accepted",
+             run_id=run_id,
+-            provider=type(self.provider).__name__,
+-            mock=self.provider.is_mock,
++            provider=selection.provider_id,
++            model=selection.model_id,
++            mock=provider.is_mock,
+         )
+         return snapshot.model_copy(deep=True)
+ 
+@@ -528,12 +626,10 @@ class RunManager:
+             state.total_tokens = add_usage(state.total_tokens, usage)
+             state.estimated_cost_usd = estimate_cost(
+                 state.total_tokens,
+-                self.settings,
+-                is_mock=self.provider.is_mock,
+-            )
+-            state.cost_available = (
+-                self.provider.is_mock or state.estimated_cost_usd is not None
++                self._pricing_for(state),
++                is_mock=state.is_mock,
+             )
++            state.cost_available = state.is_mock or state.estimated_cost_usd is not None
+             event_payload.update(
+                 {
+                     "tokens": state.total_tokens.model_dump(mode="json"),
+@@ -646,6 +742,7 @@ class RunManager:
+                 run_id=run_id,
+                 node=node,
+                 role=role,
+-                provider=type(self.provider).__name__,
++                provider=result.provider_id,
++                model=result.model_id,
+             )
+         return result
+diff --git a/backend/schemas.py b/backend/schemas.py
+index d38d8a5..b8ed5e4 100644
+--- a/backend/schemas.py
++++ b/backend/schemas.py
+@@ -104,6 +104,15 @@ class CreateRunRequest(StrictModel):
+     user_constraints: str | None = Field(default=None, max_length=2000)
+     quality_threshold: float = Field(default=85.0, ge=50, le=100)
+     max_iterations: int = Field(default=3, ge=1, le=5)
++    provider_id: str | None = Field(default=None, min_length=1, max_length=64)
++    model_id: str | None = Field(default=None, min_length=1, max_length=128)
++    """The provider and model this run must execute on, chosen by the caller.
++
++    Both or neither. A request carrying only one half describes no runnable
++    combination, and guessing the other half would silently run the user's work on
++    something they did not ask for. Omitting both is the legacy request shape and
++    still resolves to the backend's configured default.
++    """
+ 
+     @field_validator("user_idea")
+     @classmethod
+@@ -121,6 +130,22 @@ class CreateRunRequest(StrictModel):
+         normalized = value.strip()
+         return normalized or None
+ 
++    @field_validator("provider_id", "model_id")
++    @classmethod
++    def normalize_selection_id(cls, value: str | None) -> str | None:
++        if value is None:
++            return None
++        normalized = value.strip()
++        if not normalized:
++            raise ValueError("Selection identifiers cannot be blank")
++        return normalized
++
++    @model_validator(mode="after")
++    def validate_selection_pair(self) -> CreateRunRequest:
++        if (self.provider_id is None) != (self.model_id is None):
++            raise ValueError("provider_id and model_id must be provided together")
++        return self
++
+ 
+ class ResumeRunRequest(StrictModel):
+     user_override: str | None = Field(default=None, max_length=2000)
+@@ -321,6 +346,24 @@ class PRDRunState(StrictModel):
+     user_idea: str
+     target_audience: str | None = None
+     user_constraints: str | None = None
++    provider_id: str | None = None
++    model_id: str | None = None
++    """Which provider and model this run is bound to, resolved once at creation.
++
++    Nullable so that runs recorded before run-level selection existed keep loading
++    unchanged; a missing value means "not recorded", never a fabricated default.
++    Immutable for the life of the run: every node call reads the binding these
++    identifiers describe, so a later configuration change cannot move a run
++    halfway through onto a different model.
++    """
++    provider_display_name: str | None = None
++    model_display_name: str | None = None
++    """The catalog's display names as they read when the run was created.
++
++    Snapshotted rather than re-resolved on read: a finished run has to keep
++    describing what it actually used, even after the entry is renamed or removed
++    from the catalog.
++    """
+     output_language: str = DEFAULT_OUTPUT_LANGUAGE
+     """The language every agent in this run must write in.
+ 
+@@ -434,6 +477,32 @@ class HealthResponse(StrictModel):
+     provider: str
+ 
+ 
++class ModelOption(StrictModel):
++    """One selectable model, as the frontend is allowed to see it."""
++
++    model_id: str
++    model_display_name: str
++    capabilities: dict[str, Any] | None = None
++    """Safe, public metadata only -- never prices, credentials, or endpoints."""
++
++
++class ProviderOption(StrictModel):
++    provider_id: str
++    provider_display_name: str
++    models: list[ModelOption] = Field(default_factory=list)
++
++
++class ProviderCatalogResponse(StrictModel):
++    """The read-only catalog of combinations a run may currently be created on.
++
++    Derived from backend configuration, so the frontend never holds a second
++    authoritative list. Deliberately carries no API keys, base URLs, auth headers,
++    raw configuration objects, or pricing: everything here is safe to render.
++    """
++
++    providers: list[ProviderOption] = Field(default_factory=list)
++
++
+ class CreateRunResponse(StrictModel):
+     run_id: UUID
+     status: RunStatus
+diff --git a/backend/telemetry.py b/backend/telemetry.py
+index 8a2acae..ec0b10a 100644
+--- a/backend/telemetry.py
++++ b/backend/telemetry.py
+@@ -2,7 +2,7 @@ from __future__ import annotations
+ 
+ from decimal import ROUND_HALF_UP, Decimal
+ 
+-from backend.config import Settings
++from backend.config import ModelPricing
+ from backend.schemas import TokenUsage
+ 
+ 
+@@ -18,19 +18,23 @@ def add_usage(left: TokenUsage, right: TokenUsage) -> TokenUsage:
+ 
+ def estimate_cost(
+     usage: TokenUsage,
+-    settings: Settings,
++    pricing: ModelPricing | None,
+     *,
+     is_mock: bool,
+ ) -> float | None:
++    """What this usage cost, or ``None`` when the price is not known.
++
++    ``pricing`` belongs to the one model that produced ``usage`` -- the caller
++    resolves it from the run's own selection rather than from process-wide
++    configuration, so a run never has its spend valued at another model's rate.
++    A missing price stays missing: returning ``0`` would be indistinguishable
++    from a model that is genuinely free.
++    """
+     if is_mock:
+         return 0.0
+-    if not settings.has_model_pricing:
++    if pricing is None:
+         return None
+-    assert settings.model_input_price_per_million is not None
+-    assert settings.model_output_price_per_million is not None
+-    cost = Decimal(
+-        usage.input_tokens
+-    ) * settings.model_input_price_per_million / Decimal(1_000_000) + Decimal(
+-        usage.output_tokens
+-    ) * settings.model_output_price_per_million / Decimal(1_000_000)
++    cost = Decimal(usage.input_tokens) * pricing.input_per_million / Decimal(
++        1_000_000
++    ) + Decimal(usage.output_tokens) * pricing.output_per_million / Decimal(1_000_000)
+     return float(cost.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP))
+diff --git a/backend/tests/helpers.py b/backend/tests/helpers.py
+index 326edb8..605d00f 100644
+--- a/backend/tests/helpers.py
++++ b/backend/tests/helpers.py
+@@ -5,11 +5,50 @@ from typing import Any
+ from backend.config import Settings
+ from backend.event_store import EventStore, SQLiteEventStore
+ from backend.providers.base import LLMProvider
++from backend.providers.catalog import (
++    ModelDefinition,
++    ProviderCatalog,
++    ProviderDefinition,
++)
+ from backend.providers.mock import MockLLMProvider
+ from backend.run_manager import RunManager
+ from backend.run_store import InMemoryRunStore, SQLiteRunStore
+ from backend.workflow import AgentWorkflow
+ 
++#: A fixed, ordered catalog for tests that need two observably different
++#: combinations. Deterministic identifiers and display names, one deliberately
++#: unavailable entry, and no dependence on which providers the environment
++#: happens to have credentials for.
++FIXTURE_DEFINITIONS: tuple[ProviderDefinition, ...] = (
++    ProviderDefinition(
++        provider_id="fixture-alpha",
++        display_name="Fixture Alpha",
++        models=(
++            ModelDefinition(
++                model_id="alpha-standard",
++                display_name="Alpha 标准模型",
++                capabilities={"streaming": True},
++            ),
++            ModelDefinition(
++                model_id="alpha-retired",
++                display_name="Alpha 已下线模型",
++                available=False,
++            ),
++        ),
++    ),
++    ProviderDefinition(
++        provider_id="fixture-beta",
++        display_name="Fixture Beta",
++        models=(
++            ModelDefinition(
++                model_id="beta-standard",
++                display_name="Beta 标准模型",
++                capabilities=None,
++            ),
++        ),
++    ),
++)
++
+ 
+ def make_settings(**overrides: Any) -> Settings:
+     defaults: dict[str, Any] = {
+@@ -26,10 +65,30 @@ def make_settings(**overrides: Any) -> Settings:
+     return Settings(**defaults)
+ 
+ 
++def make_fixture_catalog(
++    settings: Settings,
++    *,
++    definitions: tuple[ProviderDefinition, ...] = FIXTURE_DEFINITIONS,
++    provider: LLMProvider | None = None,
++) -> ProviderCatalog:
++    """A catalog over ``definitions``, answered by one deterministic provider.
++
++    ``default_selection`` needs a default that exists in these definitions, so
++    the caller's settings must name one of them; tests that only resolve explicit
++    combinations do not care.
++    """
++    return ProviderCatalog(
++        settings,
++        provider_override=provider or MockLLMProvider(delays_enabled=False),
++        loader=lambda _: definitions,
++    )
++
++
+ def make_manager(
+     *,
+     provider: LLMProvider | None = None,
+     settings: Settings | None = None,
++    catalog: ProviderCatalog | None = None,
+ ) -> RunManager:
+     resolved_settings = settings or make_settings()
+     resolved_provider = provider or MockLLMProvider(delays_enabled=False)
+@@ -44,6 +103,7 @@ def make_manager(
+     manager = RunManager(
+         settings=resolved_settings,
+         provider=resolved_provider,
++        catalog=catalog,
+         run_store=store,
+         event_store=events,
+     )
+@@ -56,6 +116,7 @@ def make_sqlite_manager(
+     database_path: str,
+     provider: LLMProvider | None = None,
+     settings: Settings | None = None,
++    catalog: ProviderCatalog | None = None,
+ ) -> RunManager:
+     """A manager backed by the real SQLite stores, as `create_app` wires them."""
+     resolved_settings = settings or make_settings(database_path=database_path)
+@@ -74,6 +135,7 @@ def make_sqlite_manager(
+     manager = RunManager(
+         settings=resolved_settings,
+         provider=resolved_provider,
++        catalog=catalog,
+         run_store=store,
+         event_store=events,
+     )
+diff --git a/backend/tests/test_provider_selection.py b/backend/tests/test_provider_selection.py
+new file mode 100644
+index 0000000..ad00c47
+--- /dev/null
++++ b/backend/tests/test_provider_selection.py
+@@ -0,0 +1,1013 @@
++"""Run-level provider/model selection: catalog, validation, binding, persistence.
++
++The through-line of every test here is that a run executes on exactly the
++combination it recorded, and that nothing -- a typo, a removed catalog entry, a
++second concurrent run, a restart -- can quietly move it onto something else.
++"""
++
++from __future__ import annotations
++
++import asyncio
++import json
++import sqlite3
++from decimal import Decimal
++from pathlib import Path
++from typing import Any
++from uuid import UUID, uuid4
++
++import pytest
++from httpx import ASGITransport, AsyncClient
++
++from backend.config import ModelPricing, Settings
++from backend.errors import (
++    IncompleteSelectionError,
++    ModelProviderMismatchError,
++    ProviderCatalogUnavailableError,
++    ProviderSelectionUnresolvableError,
++    ProviderUnavailableError,
++    SelectionUnavailableError,
++    UnknownModelError,
++    UnknownProviderError,
++)
++from backend.main import create_app
++from backend.providers.catalog import (
++    MOCK_FAST_MODEL_ID,
++    MOCK_PROVIDER_ID,
++    MOCK_STANDARD_MODEL_ID,
++    ModelDefinition,
++    ProviderCatalog,
++    ProviderDefinition,
++)
++from backend.providers.mock import MockLLMProvider
++from backend.run_manager import RunManager
++from backend.schemas import (
++    CreateRunRequest,
++    ResumeRunRequest,
++    RunEventType,
++    RunSnapshot,
++    RunStatus,
++    utc_now,
++)
++from backend.tests.helpers import (
++    FIXTURE_DEFINITIONS,
++    make_fixture_catalog,
++    make_manager,
++    make_settings,
++    make_sqlite_manager,
++)
++from backend.tests.test_workflow import wait_for_status
++
++ALPHA = ("fixture-alpha", "alpha-standard")
++BETA = ("fixture-beta", "beta-standard")
++
++
++def create_request(**overrides: Any) -> CreateRunRequest:
++    payload: dict[str, Any] = {
++        "user_idea": "Build a podcast micro-subscription product.",
++    }
++    payload.update(overrides)
++    return CreateRunRequest(**payload)
++
++
++def fixture_manager(settings: Settings | None = None) -> RunManager:
++    resolved = settings or make_settings()
++    return make_manager(
++        settings=resolved,
++        catalog=make_fixture_catalog(resolved),
++    )
++
++
++async def client_for(app: object) -> AsyncClient:
++    return AsyncClient(
++        transport=ASGITransport(app=app),  # type: ignore[arg-type]
++        base_url="http://test",
++    )
++
++
++# --------------------------------------------------------------------------- #
++# The safe catalog
++# --------------------------------------------------------------------------- #
++
++
++async def test_catalog_endpoint_lists_only_selectable_combinations() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        response = await client.get("/api/providers")
++
++    assert response.status_code == 200
++    body = response.json()
++    assert list(body) == ["providers"]
++    providers = body["providers"]
++    assert [item["provider_id"] for item in providers] == [MOCK_PROVIDER_ID]
++    assert providers[0]["provider_display_name"]
++    assert [model["model_id"] for model in providers[0]["models"]] == [
++        MOCK_STANDARD_MODEL_ID,
++        MOCK_FAST_MODEL_ID,
++    ]
++    assert all(model["model_display_name"] for model in providers[0]["models"])
++
++
++def test_catalog_response_hides_unavailable_entries() -> None:
++    settings = make_settings()
++    catalog = make_fixture_catalog(
++        settings,
++        definitions=(
++            *FIXTURE_DEFINITIONS,
++            ProviderDefinition(
++                provider_id="fixture-keyless",
++                display_name="Fixture Keyless",
++                models=(ModelDefinition(model_id="keyless-1", display_name="Keyless"),),
++                available=False,
++            ),
++        ),
++    )
++
++    response = catalog.to_response()
++
++    assert [item.provider_id for item in response.providers] == [
++        "fixture-alpha",
++        "fixture-beta",
++    ]
++    # The unavailable model of an available provider is filtered too.
++    assert [model.model_id for model in response.providers[0].models] == [
++        "alpha-standard"
++    ]
++
++
++def test_empty_but_valid_catalog_is_an_empty_list_not_an_error() -> None:
++    settings = make_settings()
++    catalog = ProviderCatalog(settings, loader=lambda _: ())
++
++    assert catalog.to_response().providers == []
++
++
++def test_catalog_load_failure_surfaces_as_an_error() -> None:
++    def broken(_: Settings) -> tuple[ProviderDefinition, ...]:
++        raise RuntimeError("configuration is unreadable")
++
++    catalog = ProviderCatalog(make_settings(), loader=broken)
++
++    with pytest.raises(ProviderCatalogUnavailableError) as error:
++        catalog.to_response()
++    assert error.value.status_code == 503
++    assert error.value.code == "PROVIDER_CATALOG_UNAVAILABLE"
++
++
++async def test_catalog_endpoint_reports_load_failure_in_the_error_envelope() -> None:
++    settings = make_settings()
++    app = create_app(settings=settings, provider=MockLLMProvider(delays_enabled=False))
++    catalog: ProviderCatalog = app.state.manager.catalog
++
++    def broken(_: Settings) -> tuple[ProviderDefinition, ...]:
++        raise RuntimeError("configuration is unreadable")
++
++    # Replaced after startup so the app still builds; a process that cannot read
++    # its own catalog must report that instead of serving a fabricated one.
++    catalog._definitions = None
++    catalog._loader = broken
++    async with await client_for(app) as client:
++        response = await client.get("/api/providers")
++
++    assert response.status_code == 503
++    assert response.json()["error"]["code"] == "PROVIDER_CATALOG_UNAVAILABLE"
++    assert response.json()["error"]["request_id"]
++
++
++async def test_catalog_never_serializes_secrets_or_pricing() -> None:
++    """The response is checked as raw text, not field by field.
++
++    A leak would most likely arrive as a *new* field nobody asserted on, so the
++    test looks for the secret values themselves anywhere in the payload.
++    """
++    settings = make_settings(
++        enable_mock_llm=False,
++        llm_provider="deepseek",
++        deepseek_api_key="sk-deepseek-secret-value",
++        glm_api_key="sk-glm-secret-value",
++        deepseek_base_url="https://internal.deepseek.invalid/v1",
++        glm_base_url="https://internal.glm.invalid/v4",
++        model_prices={
++            "deepseek/deepseek-v4-flash": ModelPricing(
++                input_per_million=Decimal("1.23456"),
++                output_per_million=Decimal("7.89012"),
++            )
++        },
++    )
++    app = create_app(
++        settings=settings,
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        response = await client.get("/api/providers")
++
++    raw = response.text
++    assert response.status_code == 200
++    for forbidden in (
++        "sk-deepseek-secret-value",
++        "sk-glm-secret-value",
++        "internal.deepseek.invalid",
++        "internal.glm.invalid",
++        "1.23456",
++        "7.89012",
++        "api_key",
++        "base_url",
++        "Authorization",
++        "authorization",
++        "price",
++        "pricing",
++    ):
++        assert forbidden not in raw, forbidden
++    body = response.json()
++    for provider in body["providers"]:
++        assert set(provider) == {
++            "provider_id",
++            "provider_display_name",
++            "models",
++        }
++        for model in provider["models"]:
++            assert set(model) == {
++                "model_id",
++                "model_display_name",
++                "capabilities",
++            }
++
++
++# --------------------------------------------------------------------------- #
++# Creating a run on an explicit combination
++# --------------------------------------------------------------------------- #
++
++
++async def test_explicit_selection_creates_a_run_and_reports_its_metadata() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        created = await client.post(
++            "/api/runs",
++            json={
++                "user_idea": "Build a podcast micro-subscription product.",
++                "provider_id": MOCK_PROVIDER_ID,
++                "model_id": MOCK_FAST_MODEL_ID,
++            },
++        )
++        run_id = created.json()["run_id"]
++        await app.state.manager.wait_for_completion(UUID(run_id), wait_seconds=5)
++        snapshot = await client.get(f"/api/runs/{run_id}")
++
++    assert created.status_code == 202
++    # The legacy response contract is unchanged: no field was removed or renamed.
++    assert set(created.json()) == {"run_id", "status", "events_url", "created_at"}
++    body = snapshot.json()
++    assert body["provider_id"] == MOCK_PROVIDER_ID
++    assert body["model_id"] == MOCK_FAST_MODEL_ID
++    assert body["provider_display_name"]
++    assert body["model_display_name"]
++
++
++async def test_legacy_request_without_a_selection_still_runs_on_the_default() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        created = await client.post(
++            "/api/runs",
++            json={"user_idea": "Build a podcast micro-subscription product."},
++        )
++        run_id = created.json()["run_id"]
++        result = await app.state.manager.wait_for_completion(
++            UUID(run_id),
++            wait_seconds=5,
++        )
++
++    assert created.status_code == 202
++    assert result.status is RunStatus.COMPLETED
++    # Resolved to a concrete combination before executing, not left unrecorded.
++    assert result.provider_id == MOCK_PROVIDER_ID
++    assert result.model_id == MOCK_STANDARD_MODEL_ID
++    assert result.provider_display_name is not None
++    assert result.model_display_name is not None
++
++
++# --------------------------------------------------------------------------- #
++# Refusing a combination this backend cannot run
++# --------------------------------------------------------------------------- #
++
++
++@pytest.mark.parametrize(
++    ("provider_id", "model_id", "expected_code"),
++    [
++        ("no-such-provider", MOCK_STANDARD_MODEL_ID, "PROVIDER_ID_UNKNOWN"),
++        (MOCK_PROVIDER_ID, "no-such-model", "MODEL_ID_UNKNOWN"),
++    ],
++)
++async def test_unknown_selection_is_refused_and_creates_nothing(
++    provider_id: str,
++    model_id: str,
++    expected_code: str,
++) -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        response = await client.post(
++            "/api/runs",
++            json={
++                "user_idea": "Build a podcast micro-subscription product.",
++                "provider_id": provider_id,
++                "model_id": model_id,
++            },
++        )
++        listing = await client.get("/api/runs")
++
++    assert response.status_code == 422
++    error = response.json()["error"]
++    assert error["code"] == expected_code
++    assert error["request_id"]
++    # Refused before anything is written: not even a FAILED run is left behind.
++    assert listing.json() == {"items": [], "total": 0}
++
++
++@pytest.mark.parametrize(
++    "selection",
++    [
++        {"provider_id": MOCK_PROVIDER_ID},
++        {"model_id": MOCK_STANDARD_MODEL_ID},
++    ],
++)
++async def test_half_a_selection_is_a_validation_failure(
++    selection: dict[str, str],
++) -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        response = await client.post(
++            "/api/runs",
++            json={
++                "user_idea": "Build a podcast micro-subscription product.",
++                **selection,
++            },
++        )
++        listing = await client.get("/api/runs")
++
++    assert response.status_code == 422
++    assert response.json()["error"]["code"] == "REQUEST_VALIDATION_FAILED"
++    assert listing.json()["total"] == 0
++
++
++def test_model_of_another_provider_is_a_mismatch_not_an_unknown_model() -> None:
++    """The two mistakes are reported differently on purpose.
++
++    Telling someone their model does not exist, when it exists under the other
++    provider they did not pick, sends them looking for the wrong problem.
++    """
++    catalog = make_fixture_catalog(make_settings())
++
++    with pytest.raises(ModelProviderMismatchError) as mismatch:
++        catalog.resolve("fixture-alpha", "beta-standard")
++    with pytest.raises(UnknownModelError):
++        catalog.resolve("fixture-alpha", "gamma-standard")
++    with pytest.raises(UnknownProviderError):
++        catalog.resolve("fixture-gamma", "alpha-standard")
++
++    assert mismatch.value.status_code == 422
++    assert mismatch.value.code == "MODEL_PROVIDER_MISMATCH"
++
++
++def test_known_but_unavailable_combination_is_refused_as_unavailable() -> None:
++    catalog = make_fixture_catalog(make_settings())
++
++    with pytest.raises(SelectionUnavailableError) as error:
++        catalog.resolve("fixture-alpha", "alpha-retired")
++
++    assert error.value.code == "PROVIDER_MODEL_UNAVAILABLE"
++
++
++def test_select_refuses_half_a_pair_without_guessing_the_other_half() -> None:
++    catalog = make_fixture_catalog(make_settings())
++
++    with pytest.raises(IncompleteSelectionError) as error:
++        catalog.select("fixture-alpha", None)
++    with pytest.raises(IncompleteSelectionError):
++        catalog.select(None, "alpha-standard")
++
++    assert error.value.code == "PROVIDER_SELECTION_INCOMPLETE"
++
++
++def test_an_unresolvable_legacy_default_fails_instead_of_picking_something() -> None:
++    """A request with no selection still needs a real default to run on."""
++    settings = make_settings()
++    catalog = ProviderCatalog(
++        settings,
++        loader=lambda _: (
++            ProviderDefinition(
++                provider_id=MOCK_PROVIDER_ID,
++                display_name="Mock",
++                models=(
++                    ModelDefinition(
++                        model_id=MOCK_STANDARD_MODEL_ID,
++                        display_name="Mock",
++                        available=False,
++                    ),
++                ),
++            ),
++        ),
++    )
++
++    with pytest.raises(ProviderUnavailableError) as error:
++        catalog.default_selection()
++
++    assert error.value.code == "PROVIDER_UNAVAILABLE"
++    assert error.value.status_code == 503
++
++
++async def test_a_refused_selection_stays_refused_on_retry() -> None:
++    """Retrying must not be a way to end up on a different combination."""
++    manager = fixture_manager()
++
++    for _ in range(3):
++        with pytest.raises(UnknownProviderError):
++            await manager.create_run(
++                create_request(provider_id="fixture-gamma", model_id="alpha-standard")
++            )
++
++    assert await manager.run_store.count() == 0
++
++
++# --------------------------------------------------------------------------- #
++# Run-level binding and concurrency isolation
++# --------------------------------------------------------------------------- #
++
++
++class LabelledMockProvider(MockLLMProvider):
++    """A deterministic mock that records that it, specifically, was called."""
++
++    def __init__(self, label: str, log: list[str]) -> None:
++        super().__init__(delays_enabled=False)
++        self.label = label
++        self.log = log
++
++    async def generate_review(self, **kwargs: Any) -> Any:
++        self.log.append(self.label)
++        return await super().generate_review(**kwargs)
++
++
++def labelled_catalog(settings: Settings, log: list[str]) -> ProviderCatalog:
++    """A fixture catalog whose two providers are distinct objects.
++
++    No ``provider_override`` here: binding has to go through the factory so the
++    test can tell which client a run actually executed on.
++    """
++    instances = {
++        "fixture-alpha": LabelledMockProvider("alpha", log),
++        "fixture-beta": LabelledMockProvider("beta", log),
++    }
++    return ProviderCatalog(
++        settings,
++        loader=lambda _: FIXTURE_DEFINITIONS,
++        factory=lambda _s, definition, _m: instances[definition.provider_id],
++    )
++
++
++async def test_concurrent_runs_on_different_combinations_stay_isolated() -> None:
++    log: list[str] = []
++    settings = make_settings()
++    manager = make_manager(settings=settings, catalog=labelled_catalog(settings, log))
++
++    first, second = await asyncio.gather(
++        manager.create_run(create_request(provider_id=ALPHA[0], model_id=ALPHA[1])),
++        manager.create_run(create_request(provider_id=BETA[0], model_id=BETA[1])),
++    )
++    results = await asyncio.gather(
++        manager.wait_for_completion(first.run_id, wait_seconds=10),
++        manager.wait_for_completion(second.run_id, wait_seconds=10),
++    )
++
++    assert [(run.provider_id, run.model_id) for run in results] == [ALPHA, BETA]
++    assert results[0].provider_display_name == "Fixture Alpha"
++    assert results[1].provider_display_name == "Fixture Beta"
++    # Each run executed through its own client, and both really did run.
++    alpha_provider = await manager.provider_for(first.run_id)
++    beta_provider = await manager.provider_for(second.run_id)
++    assert isinstance(alpha_provider, LabelledMockProvider)
++    assert isinstance(beta_provider, LabelledMockProvider)
++    assert alpha_provider.label == "alpha"
++    assert beta_provider.label == "beta"
++    assert alpha_provider is not beta_provider
++    assert {"alpha", "beta"} <= set(log)
++
++
++async def test_pause_resume_and_cancel_leave_every_selection_untouched() -> None:
++    """Controls are orthogonal to selection, including across runs."""
++    settings = make_settings()
++    catalog = ProviderCatalog(
++        settings,
++        loader=lambda _: FIXTURE_DEFINITIONS,
++        factory=lambda _s, _d, _m: MockLLMProvider(
++            delays_enabled=True,
++            generator_delay=0.001,
++            reviewer_delay=0.03,
++            optimizer_delay=0.001,
++        ),
++    )
++    manager = make_manager(settings=settings, catalog=catalog)
++
++    paused_run = await manager.create_run(
++        create_request(provider_id=ALPHA[0], model_id=ALPHA[1])
++    )
++    await wait_for_status(manager, paused_run.run_id, {RunStatus.REVIEWING})
++    requested = await manager.request_pause(paused_run.run_id)
++    assert requested.status is RunStatus.PAUSE_REQUESTED
++    await wait_for_status(manager, paused_run.run_id, {RunStatus.PAUSED})
++
++    # A second run on a different combination, created and cancelled while the
++    # first one is parked, must not reach into it.
++    cancelled_run = await manager.create_run(
++        create_request(provider_id=BETA[0], model_id=BETA[1])
++    )
++    await manager.cancel_run(cancelled_run.run_id)
++    await wait_for_status(manager, cancelled_run.run_id, {RunStatus.CANCELLED})
++
++    still_paused = await manager.get_run(paused_run.run_id)
++    assert (still_paused.provider_id, still_paused.model_id) == ALPHA
++
++    await manager.resume_run(paused_run.run_id, ResumeRunRequest())
++    result = await manager.wait_for_completion(paused_run.run_id, wait_seconds=10)
++
++    assert result.status is RunStatus.COMPLETED
++    assert (result.provider_id, result.model_id) == ALPHA
++    assert result.provider_display_name == "Fixture Alpha"
++    cancelled = await manager.get_run(cancelled_run.run_id)
++    assert (cancelled.provider_id, cancelled.model_id) == BETA
++    assert cancelled.model_display_name == "Beta 标准模型"
++
++
++# --------------------------------------------------------------------------- #
++# Persistence, legacy databases, and rehydration
++# --------------------------------------------------------------------------- #
++
++
++def table_columns(database_path: str, table: str) -> list[str]:
++    connection = sqlite3.connect(database_path)
++    try:
++        rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
++    finally:
++        connection.close()
++    return [row[1] for row in rows]
++
++
++async def test_selection_survives_reopen_and_needs_no_schema_change(
++    tmp_path: Path,
++) -> None:
++    """The four fields live inside the snapshot JSON, so there is no DDL to run."""
++    database_path = str(tmp_path / "runs.sqlite3")
++    settings = make_settings(database_path=database_path)
++    first = make_sqlite_manager(
++        database_path=database_path,
++        settings=settings,
++        catalog=make_fixture_catalog(settings),
++    )
++    created = await first.create_run(
++        create_request(provider_id=BETA[0], model_id=BETA[1])
++    )
++    await first.wait_for_completion(created.run_id, wait_seconds=10)
++    await first.shutdown()
++
++    assert table_columns(database_path, "runs") == [
++        "run_id",
++        "snapshot_json",
++        "updated_at",
++    ]
++
++    second = make_sqlite_manager(
++        database_path=database_path,
++        settings=settings,
++        catalog=make_fixture_catalog(settings),
++    )
++    reloaded = await second.get_run(created.run_id)
++    await second.shutdown()
++
++    assert reloaded.provider_id == BETA[0]
++    assert reloaded.model_id == BETA[1]
++    assert reloaded.provider_display_name == "Fixture Beta"
++    assert reloaded.model_display_name == "Beta 标准模型"
++
++
++RENAMED_DEFINITIONS: tuple[ProviderDefinition, ...] = (
++    ProviderDefinition(
++        provider_id="fixture-beta",
++        display_name="Fixture Beta（改名后）",
++        models=(
++            ModelDefinition(
++                model_id="beta-standard",
++                display_name="Beta 标准模型（改名后）",
++            ),
++        ),
++    ),
++)
++
++
++async def test_recorded_display_names_are_not_rewritten_by_a_later_rename(
++    tmp_path: Path,
++) -> None:
++    database_path = str(tmp_path / "runs.sqlite3")
++    settings = make_settings(database_path=database_path)
++    first = make_sqlite_manager(
++        database_path=database_path,
++        settings=settings,
++        catalog=make_fixture_catalog(settings),
++    )
++    created = await first.create_run(
++        create_request(provider_id=BETA[0], model_id=BETA[1])
++    )
++    await first.wait_for_completion(created.run_id, wait_seconds=10)
++    await first.shutdown()
++
++    second = make_sqlite_manager(
++        database_path=database_path,
++        settings=settings,
++        catalog=make_fixture_catalog(settings, definitions=RENAMED_DEFINITIONS),
++    )
++    reloaded = await second.get_run(created.run_id)
++    await second.shutdown()
++
++    assert reloaded.provider_display_name == "Fixture Beta"
++    assert reloaded.model_display_name == "Beta 标准模型"
++
++
++def insert_raw_snapshot(database_path: str, payload: dict[str, Any]) -> None:
++    """Write a row exactly as given, bypassing the current model's defaults."""
++    connection = sqlite3.connect(database_path)
++    try:
++        connection.execute(
++            "INSERT INTO runs (run_id, snapshot_json, updated_at) VALUES (?, ?, ?)",
++            (payload["run_id"], json.dumps(payload), payload["updated_at"]),
++        )
++        connection.commit()
++    finally:
++        connection.close()
++
++
++def snapshot_payload_without_selection(run_id: UUID) -> dict[str, Any]:
++    """A snapshot as a pre-Round-2 backend would have written it."""
++    now = utc_now()
++    snapshot = RunSnapshot(
++        run_id=run_id,
++        user_idea="A run recorded before run-level selection existed.",
++        status=RunStatus.COMPLETED,
++        created_at=now,
++        updated_at=now,
++        completed_at=now,
++    )
++    payload = snapshot.model_dump(mode="json")
++    for field in (
++        "provider_id",
++        "model_id",
++        "provider_display_name",
++        "model_display_name",
++    ):
++        del payload[field]
++    return payload
++
++
++async def test_pre_round_two_rows_load_with_no_selection_and_still_resolve(
++    tmp_path: Path,
++) -> None:
++    """Old rows keep working, and nothing is invented to fill the gap."""
++    database_path = str(tmp_path / "legacy.sqlite3")
++    settings = make_settings(database_path=database_path)
++    seed = make_sqlite_manager(database_path=database_path, settings=settings)
++    await seed.shutdown()
++    legacy_id = uuid4()
++    insert_raw_snapshot(database_path, snapshot_payload_without_selection(legacy_id))
++
++    manager = make_sqlite_manager(
++        database_path=database_path,
++        settings=settings,
++        catalog=ProviderCatalog(settings),
++    )
++    loaded = await manager.get_run(legacy_id)
++    # An old run that still needs execution falls back to the baseline default
++    # resolution -- the one compatibility path the spec allows.
++    provider = await manager.provider_for(legacy_id)
++    await manager.shutdown()
++
++    assert loaded.provider_id is None
++    assert loaded.model_id is None
++    assert loaded.provider_display_name is None
++    assert loaded.model_display_name is None
++    assert provider.is_mock
++
++
++async def test_old_runs_are_served_over_http_with_null_metadata(
++    tmp_path: Path,
++) -> None:
++    """The keys exist and are null. An old run does not break the API or the UI."""
++    database_path = str(tmp_path / "legacy-http.sqlite3")
++    settings = make_settings(database_path=database_path)
++    seed = make_sqlite_manager(database_path=database_path, settings=settings)
++    await seed.shutdown()
++    legacy_id = uuid4()
++    insert_raw_snapshot(database_path, snapshot_payload_without_selection(legacy_id))
++
++    app = create_app(
++        settings=settings,
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        listing = await client.get("/api/runs")
++        snapshot = await client.get(f"/api/runs/{legacy_id}")
++    await app.state.manager.shutdown()
++
++    assert listing.status_code == 200
++    assert listing.json()["total"] == 1
++    assert snapshot.status_code == 200
++    body = snapshot.json()
++    for field in (
++        "provider_id",
++        "model_id",
++        "provider_display_name",
++        "model_display_name",
++    ):
++        assert field in body
++        assert body[field] is None
++
++
++async def test_a_persisted_selection_that_vanished_fails_instead_of_switching(
++    tmp_path: Path,
++) -> None:
++    database_path = str(tmp_path / "vanished.sqlite3")
++    settings = make_settings(database_path=database_path)
++    seed = make_sqlite_manager(database_path=database_path, settings=settings)
++    await seed.shutdown()
++    run_id = uuid4()
++    payload = snapshot_payload_without_selection(run_id)
++    payload.update(
++        {
++            "provider_id": "fixture-gone",
++            "model_id": "gone-standard",
++            "provider_display_name": "Fixture Gone",
++            "model_display_name": "Gone 标准模型",
++        }
++    )
++    insert_raw_snapshot(database_path, payload)
++
++    manager = make_sqlite_manager(
++        database_path=database_path,
++        settings=settings,
++        catalog=make_fixture_catalog(settings),
++    )
++    loaded = await manager.get_run(run_id)
++    with pytest.raises(ProviderSelectionUnresolvableError) as error:
++        await manager.provider_for(run_id)
++    await manager.shutdown()
++
++    # "Readable" and "executable" are separate: the history stays viewable.
++    assert loaded.provider_id == "fixture-gone"
++    assert loaded.model_id == "gone-standard"
++    assert loaded.provider_display_name == "Fixture Gone"
++    assert loaded.model_display_name == "Gone 标准模型"
++    assert error.value.code == "PROVIDER_SELECTION_UNAVAILABLE"
++    assert error.value.retryable is False
++
++
++async def test_a_run_whose_selection_disappears_fails_with_that_reason() -> None:
++    """No substitution mid-run: the run fails, naming the real cause."""
++    settings = make_settings()
++    catalog = make_fixture_catalog(settings)
++    manager = make_manager(settings=settings, catalog=catalog)
++    created = await manager.create_run(
++        create_request(provider_id=ALPHA[0], model_id=ALPHA[1])
++    )
++    # The entry leaves the configuration after binding but before the first node
++    # call. Done synchronously, before the run task gets its first slice.
++    manager._bindings.clear()
++    catalog._definitions = RENAMED_DEFINITIONS
++    catalog._instances.clear()
++
++    result = await manager.wait_for_completion(created.run_id, wait_seconds=5)
++
++    assert result.status is RunStatus.FAILED
++    assert result.error is not None
++    assert result.error.code == "PROVIDER_SELECTION_UNAVAILABLE"
++    assert result.error.retryable is False
++    assert (result.provider_id, result.model_id) == ALPHA
++    assert result.provider_display_name == "Fixture Alpha"
++
++
++# --------------------------------------------------------------------------- #
++# Per-model pricing
++# --------------------------------------------------------------------------- #
++
++
++class PricedFakeProvider(MockLLMProvider):
++    """Deterministic like the mock, but reporting itself as a real provider.
++
++    A mock run's cost is ``0`` by definition, so price lookup can only be
++    exercised by a run that presents as real. Still fully local: no network.
++    """
++
++    is_mock = False
++
++
++def priced_manager(settings: Settings) -> RunManager:
++    return make_manager(
++        settings=settings,
++        catalog=ProviderCatalog(
++            settings,
++            loader=lambda _: FIXTURE_DEFINITIONS,
++            factory=lambda _s, _d, _m: PricedFakeProvider(delays_enabled=False),
++        ),
++    )
++
++
++async def test_cost_uses_the_selected_model_price_and_never_another_model_s() -> None:
++    settings = make_settings(
++        model_prices={
++            "fixture-alpha/alpha-standard": ModelPricing(
++                input_per_million=Decimal("2"),
++                output_per_million=Decimal("8"),
++            ),
++            "fixture-beta/beta-standard": ModelPricing(
++                input_per_million=Decimal("20"),
++                output_per_million=Decimal("80"),
++            ),
++        }
++    )
++    manager = priced_manager(settings)
++
++    alpha_created = await manager.create_run(
++        create_request(provider_id=ALPHA[0], model_id=ALPHA[1])
++    )
++    beta_created = await manager.create_run(
++        create_request(provider_id=BETA[0], model_id=BETA[1])
++    )
++    alpha = await manager.wait_for_completion(alpha_created.run_id, wait_seconds=10)
++    beta = await manager.wait_for_completion(beta_created.run_id, wait_seconds=10)
++
++    assert alpha.total_tokens.total_tokens == beta.total_tokens.total_tokens > 0
++    assert alpha.estimated_cost_usd is not None
++    assert beta.estimated_cost_usd is not None
++    assert alpha.cost_available is True
++    assert beta.cost_available is True
++    # Identical usage, ten times the price: each run was valued at its own rate.
++    assert beta.estimated_cost_usd == pytest.approx(
++        alpha.estimated_cost_usd * 10,
++        rel=1e-4,
++    )
++
++
++async def test_a_model_without_a_price_reports_unknown_and_still_runs() -> None:
++    """Unknown cost is ``None``. Reporting ``0`` would read as "free"."""
++    settings = make_settings(
++        model_prices={
++            "fixture-alpha/alpha-standard": ModelPricing(
++                input_per_million=Decimal("2"),
++                output_per_million=Decimal("8"),
++            )
++        }
++    )
++    manager = priced_manager(settings)
++
++    created = await manager.create_run(
++        create_request(provider_id=BETA[0], model_id=BETA[1])
++    )
++    result = await manager.wait_for_completion(created.run_id, wait_seconds=10)
++
++    assert result.status is RunStatus.COMPLETED
++    assert result.total_tokens.total_tokens > 0
++    assert result.estimated_cost_usd is None
++    assert result.cost_available is False
++
++
++# --------------------------------------------------------------------------- #
++# Contracts this feature is not allowed to change
++# --------------------------------------------------------------------------- #
++
++
++def test_no_run_event_type_was_added_for_selection() -> None:
++    """Selection is metadata on a run, not a new thing that happens to it."""
++    assert [member.value for member in RunEventType] == [
++        "run_started",
++        "status_changed",
++        "node_started",
++        "prd_delta",
++        "prd_stream_reset",
++        "prd_generated",
++        "review_completed",
++        "scores_updated",
++        "revision_planned",
++        "pause_requested",
++        "run_paused",
++        "run_resumed",
++        "telemetry_updated",
++        "run_completed",
++        "max_iterations_reached",
++        "run_cancelled",
++        "run_failed",
++    ]
++
++
++async def test_health_and_openapi_keep_their_shape() -> None:
++    app = create_app(
++        settings=make_settings(),
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        health = await client.get("/api/health")
++        openapi = await client.get("/openapi.json")
++
++    # Unchanged field-for-field: a process-level report, not a run-level one.
++    assert health.json() == {
++        "status": "ok",
++        "mock_mode": True,
++        "provider": "mock",
++    }
++    schema = openapi.json()
++    assert "/api/providers" in schema["paths"]
++    assert "ProviderCatalogResponse" in schema["components"]["schemas"]
++    create_request_schema = schema["components"]["schemas"]["CreateRunRequest"]
++    # Added, not replaced: every legacy field is still there, and both new ones
++    # are optional so a client that never heard of them keeps working.
++    assert {"provider_id", "model_id"} <= set(create_request_schema["properties"])
++    assert "user_idea" in create_request_schema["required"]
++    assert "provider_id" not in create_request_schema.get("required", [])
++    assert "model_id" not in create_request_schema.get("required", [])
++
++
++async def test_catalog_and_mock_output_are_deterministic_across_models() -> None:
++    """The two mock models differ in pacing only, and ordering never wobbles."""
++    app = create_app(
++        settings=make_settings(),
++        provider=None,
++    )
++    async with await client_for(app) as client:
++        first_catalog = await client.get("/api/providers")
++        second_catalog = await client.get("/api/providers")
++    assert first_catalog.json() == second_catalog.json()
++
++    manager = make_manager(settings=make_settings(), catalog=None)
++    standard = await manager.create_run(
++        create_request(
++            provider_id=MOCK_PROVIDER_ID,
++            model_id=MOCK_STANDARD_MODEL_ID,
++        )
++    )
++    fast = await manager.create_run(
++        create_request(provider_id=MOCK_PROVIDER_ID, model_id=MOCK_FAST_MODEL_ID)
++    )
++    standard_result = await manager.wait_for_completion(
++        standard.run_id,
++        wait_seconds=10,
++    )
++    fast_result = await manager.wait_for_completion(fast.run_id, wait_seconds=10)
++
++    assert standard_result.status is fast_result.status is RunStatus.COMPLETED
++    assert standard_result.current_prd == fast_result.current_prd
++    assert [version.evaluation for version in standard_result.versions] == [
++        version.evaluation for version in fast_result.versions
++    ]
++    assert standard_result.model_id == MOCK_STANDARD_MODEL_ID
++    assert fast_result.model_id == MOCK_FAST_MODEL_ID
++
++
++async def test_run_payloads_never_carry_credentials_or_endpoints(
++    tmp_path: Path,
++) -> None:
++    """Checked as raw text over the wire, including the event stream."""
++    settings = make_settings(
++        database_path=str(tmp_path / "safety.sqlite3"),
++        enable_mock_llm=True,
++        deepseek_api_key="sk-deepseek-secret-value",
++        deepseek_base_url="https://internal.deepseek.invalid/v1",
++    )
++    app = create_app(
++        settings=settings,
++        provider=MockLLMProvider(delays_enabled=False),
++    )
++    async with await client_for(app) as client:
++        created = await client.post(
++            "/api/runs",
++            json={
++                "user_idea": "Build a podcast micro-subscription product.",
++                "provider_id": MOCK_PROVIDER_ID,
++                "model_id": MOCK_STANDARD_MODEL_ID,
++            },
++        )
++        run_id = created.json()["run_id"]
++        await app.state.manager.wait_for_completion(UUID(run_id), wait_seconds=10)
++        snapshot = await client.get(f"/api/runs/{run_id}")
++        events = await client.get(f"/api/runs/{run_id}/events?after_sequence=0")
++    await app.state.manager.shutdown()
++
++    for payload in (created.text, snapshot.text, events.text):
++        assert "sk-deepseek-secret-value" not in payload
++        assert "internal.deepseek.invalid" not in payload
++        assert "api_key" not in payload
+diff --git a/backend/tests/test_telemetry.py b/backend/tests/test_telemetry.py
+index 61f64cd..6ee0af7 100644
+--- a/backend/tests/test_telemetry.py
++++ b/backend/tests/test_telemetry.py
+@@ -1,8 +1,8 @@
+ from decimal import Decimal
+ 
++from backend.config import ModelPricing
+ from backend.schemas import TokenUsage
+ from backend.telemetry import add_usage, estimate_cost
+-from backend.tests.helpers import make_settings
+ 
+ 
+ def test_usage_addition_and_known_cost() -> None:
+@@ -10,18 +10,29 @@ def test_usage_addition_and_known_cost() -> None:
+         TokenUsage(input_tokens=100, output_tokens=50, total_tokens=150),
+         TokenUsage(input_tokens=200, output_tokens=100, total_tokens=300),
+     )
+-    settings = make_settings(
+-        model_input_price_per_million=Decimal("2"),
+-        model_output_price_per_million=Decimal("8"),
++    pricing = ModelPricing(
++        input_per_million=Decimal("2"),
++        output_per_million=Decimal("8"),
+     )
+ 
+     assert usage.total_tokens == 450
+-    assert estimate_cost(usage, settings, is_mock=False) == 0.0018
++    assert estimate_cost(usage, pricing, is_mock=False) == 0.0018
+ 
+ 
+ def test_unknown_real_cost_is_none_and_mock_cost_is_zero() -> None:
+     usage = TokenUsage(input_tokens=10, output_tokens=20, total_tokens=30)
+-    settings = make_settings()
+ 
+-    assert estimate_cost(usage, settings, is_mock=False) is None
+-    assert estimate_cost(usage, settings, is_mock=True) == 0.0
++    assert estimate_cost(usage, None, is_mock=False) is None
++    assert estimate_cost(usage, None, is_mock=True) == 0.0
++
++
++def test_explicit_zero_price_is_not_missing_pricing() -> None:
++    """A configured free model costs ``0``; an unpriced one stays unknown."""
++    usage = TokenUsage(input_tokens=1_000, output_tokens=2_000, total_tokens=3_000)
++    free = ModelPricing(
++        input_per_million=Decimal("0"),
++        output_per_million=Decimal("0"),
++    )
++
++    assert estimate_cost(usage, free, is_mock=False) == 0.0
++    assert estimate_cost(usage, None, is_mock=False) is None
+diff --git a/backend/workflow.py b/backend/workflow.py
+index 471f024..d28fa3f 100644
+--- a/backend/workflow.py
++++ b/backend/workflow.py
+@@ -113,6 +113,10 @@ class AgentWorkflow:
+ 
+     async def run(self, run_id: UUID) -> None:
+         try:
++            # Resolved before the run reports anything: a run whose recorded
++            # provider and model no longer exist has to fail with that reason
++            # rather than start up on whatever the backend is configured with now.
++            provider = await self.manager.provider_for(run_id)
+             await self.manager.commit(
+                 run_id,
+                 lambda state: setattr(state, "started_at", utc_now()),
+@@ -126,7 +130,7 @@ class AgentWorkflow:
+                         "max_iterations": (
+                             await self.manager.get_run(run_id)
+                         ).max_iterations,
+-                        "mock": self.manager.provider.is_mock,
++                        "mock": provider.is_mock,
+                     },
+                 },
+             )
+@@ -303,7 +307,7 @@ class AgentWorkflow:
+                     run_id=run_id,
+                     node="generator",
+                     attempt=attempt + 1,
+-                    provider=type(self.manager.provider).__name__,
++                    provider=self.manager.selection_label(run_id),
+                 )
+         else:
+             raise RetryableProviderError
+@@ -364,7 +368,8 @@ class AgentWorkflow:
+         attempt: int,
+         record: _AttemptRecord,
+     ) -> tuple[str, TokenUsage]:
+-        iterator = self.manager.provider.stream_prd(
++        provider = await self.manager.provider_for(run_id)
++        iterator = provider.stream_prd(
+             user_idea=state.user_idea,
+             target_audience=state.target_audience,
+             user_constraints=state.user_constraints,
+@@ -508,9 +513,10 @@ class AgentWorkflow:
+             role=role.value,
+         )
+         state = await self.manager.get_run(run_id)
++        provider = await self.manager.provider_for(run_id)
+ 
+         async def call() -> ProviderStructuredResult:
+-            return await self.manager.provider.generate_review(
++            return await provider.generate_review(
+                 role=role,
+                 prd=state.current_prd,
+                 iteration=state.current_iteration,
+@@ -588,16 +594,17 @@ class AgentWorkflow:
+                     node=kind,
+                     role=role,
+                     attempt=attempt + 2,
+-                    provider=type(self.manager.provider).__name__,
++                    provider=self.manager.selection_label(run_id),
+                 )
+         assert result is not None
+         try:
+             parsed = model.model_validate(result.value)  # type: ignore[attr-defined]
+             return result, parsed
+         except ValidationError as exc:
++            provider = await self.manager.provider_for(run_id)
+             repaired = await self._await_provider(
+                 run_id,
+-                self.manager.provider.repair_structured(
++                provider.repair_structured(
+                     kind=kind,
+                     raw_value=result.value,
+                     validation_error=str(exc),
+@@ -773,10 +780,11 @@ class AgentWorkflow:
+         state = await self.manager.get_run(run_id)
+         if state.latest_evaluation is None:
+             raise ValueError("Optimizer requires an evaluation")
++        provider = await self.manager.provider_for(run_id)
+ 
+         async def call() -> ProviderStructuredResult:
+             assert state.latest_evaluation is not None
+-            return await self.manager.provider.generate_revision_plan(
++            return await provider.generate_revision_plan(
+                 evaluation=state.latest_evaluation,
+                 iteration=state.current_iteration,
+                 user_override=state.pending_user_override,
+diff --git a/src/components/AgentDashboard.test.tsx b/src/components/AgentDashboard.test.tsx
+index 6ebb8ee..3df80bc 100644
+--- a/src/components/AgentDashboard.test.tsx
++++ b/src/components/AgentDashboard.test.tsx
+@@ -9,6 +9,7 @@ import {
+   makeRevisionPlan,
+   makeSnapshot,
+   makeVersion,
++  PROVIDER_CATALOG,
+   RUN_ID,
+ } from "../test/fixtures";
+ import { AgentDashboard } from "./AgentDashboard";
+@@ -24,6 +25,7 @@ vi.mock("mermaid", () => ({
+ 
+ function apiFor(status: RunStatus): AgentApi {
+   return {
++    listProviders: vi.fn().mockResolvedValue(PROVIDER_CATALOG),
+     createRun: vi.fn(),
+     listRuns: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+     getRun: vi.fn().mockResolvedValue(
+@@ -84,6 +86,21 @@ describe("AgentDashboard state framework", () => {
+       screen.getByLabelText(/产品想法/),
+       "A detailed product workflow for independent creators",
+     );
++    // The catalog has to arrive before a run can be created at all: Create stays
++    // disabled until a complete provider/model pair is chosen.
++    await waitFor(() =>
++      expect(
++        (screen.getByTestId("provider-select") as HTMLSelectElement).disabled,
++      ).toBe(false),
++    );
++    await userEvent.selectOptions(
++      screen.getByTestId("provider-select"),
++      "fixture-alpha",
++    );
++    await userEvent.selectOptions(
++      screen.getByTestId("model-select"),
++      "alpha-standard",
++    );
+     await userEvent.click(
+       screen.getByRole("button", { name: /开始生成 PRD/i }),
+     );
+diff --git a/src/components/AgentDashboard.tsx b/src/components/AgentDashboard.tsx
+index 4f0a42b..ff8c728 100644
+--- a/src/components/AgentDashboard.tsx
++++ b/src/components/AgentDashboard.tsx
+@@ -2,6 +2,7 @@ import { AlertCircle, Boxes, RefreshCw } from "lucide-react";
+ import { lazy, Suspense, useState } from "react";
+ 
+ import { useAgentRun, type UseAgentRunOptions } from "../hooks/useAgentRun";
++import { useProviderCatalog } from "../hooks/useProviderCatalog";
+ import { failureNotice } from "../lib/failureNotice";
+ import { outcomeSummary } from "../lib/outcomeSummary";
+ import type { ConnectionStatus, VersionScore } from "../lib/runReducer";
+@@ -87,6 +88,9 @@ export function AgentDashboard({
+     ...(eventSourceFactory ? { eventSourceFactory } : {}),
+   });
+   const { state } = controller;
++  // One client for both: the catalog the form offers has to come from the same
++  // backend the run is created against.
++  const catalog = useProviderCatalog(controller.api);
+   const snapshot = state.snapshot;
+   const [requestedTab, setRequestedTab] = useState("prd");
+ 
+@@ -318,6 +322,7 @@ export function AgentDashboard({
+                 </div>
+                 <ProductIdeaForm
+                   isSubmitting={state.isCreating}
++                  catalog={catalog}
+                   onSubmit={controller.createRun}
+                 />
+               </section>
+diff --git a/src/components/ProductIdeaForm.tsx b/src/components/ProductIdeaForm.tsx
+index e20b9e2..aca6b91 100644
+--- a/src/components/ProductIdeaForm.tsx
++++ b/src/components/ProductIdeaForm.tsx
+@@ -1,11 +1,14 @@
+-import { ArrowRight, Sparkles } from "lucide-react";
+-import { useState } from "react";
++import { ArrowRight, RefreshCw, Sparkles } from "lucide-react";
++import { useEffect, useState } from "react";
+ import type { FormEvent } from "react";
+ 
++import type { ProviderCatalogState } from "../hooks/useProviderCatalog";
+ import type { CreateRunRequest } from "../lib/types";
+ 
+ interface ProductIdeaFormProps {
+   isSubmitting: boolean;
++  /** The backend's list of runnable combinations, plus how loading it went. */
++  catalog: ProviderCatalogState;
+   onSubmit(request: CreateRunRequest): Promise<void>;
+ }
+ 
+@@ -15,8 +18,14 @@ interface FormErrors {
+   constraints?: string;
+ }
+ 
++const CATALOG_HINTS: Record<string, string> = {
++  loading: "正在加载可选的 Provider / 模型…",
++  empty: "后端当前没有可用的 Provider / 模型，无法创建任务。",
++};
++
+ export function ProductIdeaForm({
+   isSubmitting,
++  catalog,
+   onSubmit,
+ }: ProductIdeaFormProps) {
+   const [idea, setIdea] = useState("");
+@@ -24,12 +33,40 @@ export function ProductIdeaForm({
+   const [constraints, setConstraints] = useState("");
+   const [qualityThreshold, setQualityThreshold] = useState(85);
+   const [maxIterations, setMaxIterations] = useState(3);
++  const [providerId, setProviderId] = useState("");
++  const [modelId, setModelId] = useState("");
+   const [errors, setErrors] = useState<FormErrors>({});
+   const [submittingLocally, setSubmittingLocally] = useState(false);
+ 
++  const selectedProvider =
++    catalog.providers.find((provider) => provider.provider_id === providerId) ??
++    null;
++  const models = selectedProvider?.models ?? [];
++
++  // A reload can retire whatever was picked. Drop the stale half instead of
++  // sliding the user onto a neighbouring entry they never chose.
++  useEffect(() => {
++    if (providerId !== "" && selectedProvider === null) {
++      setProviderId("");
++      setModelId("");
++      return;
++    }
++    if (
++      modelId !== "" &&
++      !models.some((model) => model.model_id === modelId)
++    ) {
++      setModelId("");
++    }
++  }, [modelId, models, providerId, selectedProvider]);
++
++  const busy = isSubmitting || submittingLocally;
++  const catalogReady = catalog.status === "loaded";
++  const selectionComplete = catalogReady && providerId !== "" && modelId !== "";
++  const catalogHint = catalog.error ?? CATALOG_HINTS[catalog.status] ?? null;
++
+   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+     event.preventDefault();
+-    if (isSubmitting || submittingLocally) {
++    if (busy || !selectionComplete) {
+       return;
+     }
+     const normalizedIdea = idea.trim();
+@@ -58,14 +95,14 @@ export function ProductIdeaForm({
+         user_constraints: constraints.trim() || null,
+         quality_threshold: qualityThreshold,
+         max_iterations: maxIterations,
++        provider_id: providerId,
++        model_id: modelId,
+       });
+     } finally {
+       setSubmittingLocally(false);
+     }
+   }
+ 
+-  const busy = isSubmitting || submittingLocally;
+-
+   return (
+     <form className="panel" onSubmit={handleSubmit} noValidate>
+       <div className="panel-heading">
+@@ -129,6 +166,84 @@ export function ProductIdeaForm({
+         </label>
+       </div>
+ 
++      <fieldset
++        className="mt-5 border-t border-line pt-4"
++        data-testid="provider-selection"
++      >
++        <legend className="text-sm font-medium text-ink">
++          运行使用的 Provider / 模型
++        </legend>
++        <div className="mt-3 grid gap-5 md:grid-cols-2">
++          <label className="block text-sm font-medium text-ink">
++            Provider
++            <select
++              className="field mt-2"
++              data-testid="provider-select"
++              aria-label="Provider"
++              value={providerId}
++              disabled={!catalogReady || busy}
++              onChange={(event) => {
++                setProviderId(event.target.value);
++                // The old model almost certainly belongs to the old provider.
++                setModelId("");
++              }}
++            >
++              <option value="">请选择 Provider</option>
++              {catalog.providers.map((provider) => (
++                <option
++                  key={provider.provider_id}
++                  value={provider.provider_id}
++                >
++                  {provider.provider_display_name}
++                </option>
++              ))}
++            </select>
++          </label>
++          <label className="block text-sm font-medium text-ink">
++            模型
++            <select
++              className="field mt-2"
++              data-testid="model-select"
++              aria-label="模型"
++              value={modelId}
++              disabled={!catalogReady || busy || selectedProvider === null}
++              onChange={(event) => setModelId(event.target.value)}
++            >
++              <option value="">
++                {selectedProvider === null ? "请先选择 Provider" : "请选择模型"}
++              </option>
++              {models.map((model) => (
++                <option key={model.model_id} value={model.model_id}>
++                  {model.model_display_name}
++                </option>
++              ))}
++            </select>
++          </label>
++        </div>
++        {catalogHint !== null && (
++          <p
++            className={`mt-3 text-xs ${
++              catalog.status === "error" ? "text-danger" : "text-ink-faint"
++            }`}
++            data-testid="catalog-status"
++            role={catalog.status === "error" ? "alert" : undefined}
++          >
++            {catalogHint}
++          </p>
++        )}
++        {catalog.status === "error" && (
++          <button
++            className="button-secondary mt-3"
++            type="button"
++            data-testid="catalog-retry"
++            onClick={catalog.reload}
++          >
++            <RefreshCw aria-hidden="true" size={14} />
++            重新加载列表
++          </button>
++        )}
++      </fieldset>
++
+       <details className="mt-5 border-t border-line pt-4">
+         <summary className="cursor-pointer text-sm font-medium text-ink-muted">
+           质量设置
+@@ -167,7 +282,7 @@ export function ProductIdeaForm({
+       <button
+         className="button-primary mt-5 w-full sm:w-auto"
+         type="submit"
+-        disabled={busy}
++        disabled={busy || !selectionComplete}
+       >
+         {busy ? "正在创建任务…" : "开始生成 PRD"}
+         {!busy && <ArrowRight aria-hidden="true" size={16} />}
+diff --git a/src/components/TelemetryPanel.tsx b/src/components/TelemetryPanel.tsx
+index 7d95479..dfe6f71 100644
+--- a/src/components/TelemetryPanel.tsx
++++ b/src/components/TelemetryPanel.tsx
+@@ -1,4 +1,4 @@
+-import { Clock3, Coins, Cpu, Gauge } from "lucide-react";
++import { Boxes, Clock3, Coins, Cpu, Gauge } from "lucide-react";
+ 
+ import {
+   formatSeconds,
+@@ -14,6 +14,20 @@ function formatElapsed(seconds: number): string {
+   return minutes > 0 ? `${minutes}分 ${remainder}秒` : `${remainder}秒`;
+ }
+ 
++/**
++ * What the run recorded, or an explicit "未记录".
++ *
++ * Read straight off the snapshot -- never resolved against the live catalog --
++ * so a renamed or removed entry still reads the way it did when the run ran, and
++ * a run from before selection existed says so instead of borrowing a default.
++ */
++function selectionLabel(
++  displayName: string | null | undefined,
++  id: string | null | undefined,
++): string {
++  return displayName?.trim() || id?.trim() || "未记录";
++}
++
+ export function TelemetryPanel({ snapshot }: { snapshot: RunSnapshot }) {
+   const timings = nodeTimingRows(snapshot.node_timings);
+   const slowest = slowestSeconds(timings);
+@@ -75,6 +89,41 @@ export function TelemetryPanel({ snapshot }: { snapshot: RunSnapshot }) {
+         ))}
+       </dl>
+ 
++      <div className="mt-5 min-w-0" data-testid="run-selection">
++        <h3 className="meta-label">运行使用的模型</h3>
++        <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-3">
++          <div className="min-w-0 border-l border-line pl-3">
++            <dt className="flex items-center gap-1.5 text-[11px] text-ink-faint">
++              <Boxes aria-hidden="true" size={12} />
++              Provider
++            </dt>
++            <dd
++              className="mt-0.5 truncate text-sm font-medium text-ink"
++              data-testid="run-provider"
++              title={snapshot.provider_id ?? undefined}
++            >
++              {selectionLabel(
++                snapshot.provider_display_name,
++                snapshot.provider_id,
++              )}
++            </dd>
++          </div>
++          <div className="min-w-0 border-l border-line pl-3">
++            <dt className="flex items-center gap-1.5 text-[11px] text-ink-faint">
++              <Cpu aria-hidden="true" size={12} />
++              模型
++            </dt>
++            <dd
++              className="mt-0.5 truncate text-sm font-medium text-ink"
++              data-testid="run-model"
++              title={snapshot.model_id ?? undefined}
++            >
++              {selectionLabel(snapshot.model_display_name, snapshot.model_id)}
++            </dd>
++          </div>
++        </dl>
++      </div>
++
+       {/* Which node owned the time. A 500-second run gives no clue on its own,
+           and the answer is only ever needed after the fact, so it lives here in
+           运行记录 rather than beside the document. */}
+diff --git a/src/hooks/useAgentRun.test.tsx b/src/hooks/useAgentRun.test.tsx
+index 97835b3..700a0f7 100644
+--- a/src/hooks/useAgentRun.test.tsx
++++ b/src/hooks/useAgentRun.test.tsx
+@@ -6,11 +6,12 @@ import type {
+   ControlResponse,
+   CreateRunRequest,
+   CreateRunResponse,
++  ProviderCatalogResponse,
+   ResumeRunRequest,
+   RunSnapshot,
+   RunListResponse,
+ } from "../lib/types";
+-import { makeEvent, makeSnapshot, RUN_ID } from "../test/fixtures";
++import { makeEvent, makeSnapshot, PROVIDER_CATALOG, RUN_ID } from "../test/fixtures";
+ import {
+   SOURCE_CLOSED,
+   SOURCE_CONNECTING,
+@@ -73,6 +74,7 @@ class MockEventSource implements EventSourceLike {
+ }
+ 
+ class FakeApi implements AgentApi {
++  listProviders = vi.fn<() => Promise<ProviderCatalogResponse>>();
+   listRuns = vi.fn<() => Promise<RunListResponse>>();
+   getRun = vi.fn<(runId: string) => Promise<RunSnapshot>>();
+   createRun =
+@@ -92,6 +94,7 @@ class FakeApi implements AgentApi {
+ 
+ function setup(snapshot = makeSnapshot({ latest_event_sequence: 7 })) {
+   const api = new FakeApi();
++  api.listProviders.mockResolvedValue(PROVIDER_CATALOG);
+   api.listRuns.mockResolvedValue({ items: [], total: 0 });
+   api.getRun.mockResolvedValue(snapshot);
+   api.createRun.mockResolvedValue({
+diff --git a/src/hooks/useAgentRun.ts b/src/hooks/useAgentRun.ts
+index acf2bf2..07d1d38 100644
+--- a/src/hooks/useAgentRun.ts
++++ b/src/hooks/useAgentRun.ts
+@@ -71,6 +71,13 @@ export interface UseAgentRunOptions {
+ 
+ export interface AgentRunController {
+   state: RunViewState;
++  /**
++   * The client this controller talks to.
++   *
++   * Exposed so sibling features (the provider catalog) reuse the one configured
++   * client instead of constructing a second one with its own base URL.
++   */
++  api: AgentApi;
+   conversations: RunSummary[];
+   isLoadingConversations: boolean;
+   createRun(request: CreateRunRequest): Promise<void>;
+@@ -392,6 +399,7 @@ export function useAgentRun(
+ 
+   return {
+     state,
++    api,
+     conversations,
+     isLoadingConversations,
+     createRun,
+diff --git a/src/hooks/useProviderCatalog.ts b/src/hooks/useProviderCatalog.ts
+new file mode 100644
+index 0000000..0d81bf3
+--- /dev/null
++++ b/src/hooks/useProviderCatalog.ts
+@@ -0,0 +1,85 @@
++import { useCallback, useEffect, useRef, useState } from "react";
++
++import { ApiClientError, type AgentApi } from "../lib/api";
++import { localizedErrorMessage } from "../lib/errorMessages";
++import type { ProviderOption } from "../lib/types";
++
++/**
++ * Four states, because the form has to behave differently in each one.
++ *
++ * `empty` is deliberately not folded into `loaded`: a backend that answered
++ * correctly with nothing runnable is not an error, but it still cannot accept a
++ * run, and the user needs to be told which of the two happened.
++ */
++export type ProviderCatalogStatus = "loading" | "empty" | "error" | "loaded";
++
++export interface ProviderCatalogState {
++  status: ProviderCatalogStatus;
++  providers: ProviderOption[];
++  /** Localized, user-facing reason for `status === "error"`; otherwise null. */
++  error: string | null;
++  reload(): void;
++}
++
++function messageFromError(error: unknown): string {
++  if (error instanceof ApiClientError) {
++    return localizedErrorMessage(error.code);
++  }
++  return "无法加载可选的 Provider / 模型列表，请稍后重试。";
++}
++
++/**
++ * The backend catalog, and nothing else.
++ *
++ * There is no hard-coded fallback list here on purpose: offering a combination
++ * this backend never advertised would put the user in front of a choice that
++ * can only fail at create time.
++ */
++export function useProviderCatalog(api: AgentApi): ProviderCatalogState {
++  const [status, setStatus] = useState<ProviderCatalogStatus>("loading");
++  const [providers, setProviders] = useState<ProviderOption[]>([]);
++  const [error, setError] = useState<string | null>(null);
++  const mountedRef = useRef(false);
++  const attemptRef = useRef(0);
++
++  const load = useCallback(async (): Promise<void> => {
++    const attempt = ++attemptRef.current;
++    setStatus("loading");
++    setError(null);
++    try {
++      const response = await api.listProviders();
++      if (!mountedRef.current || attempt !== attemptRef.current) {
++        return;
++      }
++      // A provider with no selectable model cannot complete a pair, so it is
++      // dropped rather than shown as a dead end in the selector.
++      const usable = response.providers.filter(
++        (provider) => provider.models.length > 0,
++      );
++      setProviders(usable);
++      setStatus(usable.length === 0 ? "empty" : "loaded");
++    } catch (cause) {
++      if (!mountedRef.current || attempt !== attemptRef.current) {
++        return;
++      }
++      setProviders([]);
++      setError(messageFromError(cause));
++      setStatus("error");
++    }
++  }, [api]);
++
++  useEffect(() => {
++    mountedRef.current = true;
++    void load();
++    return () => {
++      mountedRef.current = false;
++      attemptRef.current += 1;
++    };
++  }, [load]);
++
++  const reload = useCallback(() => {
++    void load();
++  }, [load]);
++
++  return { status, providers, error, reload };
++}
+diff --git a/src/lib/api.ts b/src/lib/api.ts
+index 3f050ce..5163bc6 100644
+--- a/src/lib/api.ts
++++ b/src/lib/api.ts
+@@ -1,6 +1,7 @@
+ import {
+   isRunStatus,
+   parseErrorResponse,
++  parseProviderCatalog,
+   parseRunListResponse,
+   parseRunSnapshot,
+ } from "./contracts";
+@@ -9,6 +10,7 @@ import type {
+   ControlResponse,
+   CreateRunRequest,
+   CreateRunResponse,
++  ProviderCatalogResponse,
+   ResumeRunRequest,
+   RunListResponse,
+   RunSnapshot,
+@@ -34,6 +36,7 @@ export class ApiClientError extends Error {
+ }
+ 
+ export interface AgentApi {
++  listProviders(): Promise<ProviderCatalogResponse>;
+   createRun(request: CreateRunRequest): Promise<CreateRunResponse>;
+   listRuns(limit?: number): Promise<RunListResponse>;
+   getRun(runId: string): Promise<RunSnapshot>;
+@@ -99,6 +102,10 @@ export class HttpAgentApi implements AgentApi {
+     this.baseUrl = resolvePublicApiBaseUrl(baseUrl);
+   }
+ 
++  listProviders(): Promise<ProviderCatalogResponse> {
++    return this.request("/api/providers", undefined, parseProviderCatalog);
++  }
++
+   createRun(request: CreateRunRequest): Promise<CreateRunResponse> {
+     return this.request(
+       "/api/runs",
+diff --git a/src/lib/contracts.ts b/src/lib/contracts.ts
+index 8203d7b..21cb58a 100644
+--- a/src/lib/contracts.ts
++++ b/src/lib/contracts.ts
+@@ -3,6 +3,7 @@ import type {
+   ErrorResponse,
+   FeedbackItem,
+   FeedbackSeverity,
++  ProviderCatalogResponse,
+   RoleReview,
+   RunEvent,
+   RunEventType,
+@@ -130,6 +131,39 @@ export function parseCreateRunRequest(value: unknown): CreateRunRequest {
+   return value as unknown as CreateRunRequest;
+ }
+ 
++/**
++ * The provider catalog, rejected outright if it is not the shape we expect.
++ *
++ * A malformed catalog has to surface as the error state rather than as a
++ * half-populated selector: a caller cannot pick safely from a list the frontend
++ * only partly understood.
++ */
++export function parseProviderCatalog(value: unknown): ProviderCatalogResponse {
++  if (!isRecord(value) || !Array.isArray(value.providers)) {
++    throw new TypeError("Invalid ProviderCatalogResponse contract");
++  }
++  for (const provider of value.providers) {
++    if (
++      !isRecord(provider) ||
++      !isString(provider.provider_id) ||
++      !isString(provider.provider_display_name) ||
++      !Array.isArray(provider.models)
++    ) {
++      throw new TypeError("Invalid ProviderOption contract");
++    }
++    for (const model of provider.models) {
++      if (
++        !isRecord(model) ||
++        !isString(model.model_id) ||
++        !isString(model.model_display_name)
++      ) {
++        throw new TypeError("Invalid ModelOption contract");
++      }
++    }
++  }
++  return value as unknown as ProviderCatalogResponse;
++}
++
+ export function parseRunSnapshot(value: unknown): RunSnapshot {
+   if (
+     !isRecord(value) ||
+diff --git a/src/lib/errorMessages.ts b/src/lib/errorMessages.ts
+index 511ac25..b3b3407 100644
+--- a/src/lib/errorMessages.ts
++++ b/src/lib/errorMessages.ts
+@@ -28,6 +28,18 @@ const ERROR_MESSAGES: Record<string, string> = {
+     "模型服务的内容安全策略拦截了本次生成，请调整需求描述后重试。",
+   PROVIDER_ERROR: "模型服务调用失败，请稍后重试。",
+   PROVIDER_UNAVAILABLE: "模型服务不可用，请检查 Provider 配置。",
++  // Selection failures name the specific mistake: the user picked something, and
++  // "操作失败" would not tell them what to change.
++  PROVIDER_CATALOG_UNAVAILABLE:
++    "无法加载可选的 Provider / 模型列表，请检查后端配置后重试。",
++  PROVIDER_ID_UNKNOWN: "所选 Provider 已不在可选列表中，请重新选择。",
++  MODEL_ID_UNKNOWN: "所选模型已不在可选列表中，请重新选择。",
++  MODEL_PROVIDER_MISMATCH: "所选模型不属于该 Provider，请重新选择。",
++  PROVIDER_MODEL_UNAVAILABLE:
++    "该 Provider 与模型的组合当前不可用，请重新选择。",
++  PROVIDER_SELECTION_INCOMPLETE: "请同时选择 Provider 和模型。",
++  PROVIDER_SELECTION_UNAVAILABLE:
++    "该任务记录的 Provider / 模型已不可用，无法继续执行。",
+   RUN_TIMEOUT: "任务运行超时，请缩小需求范围后重试。",
+   STRUCTURED_OUTPUT_INVALID: "模型返回的数据格式无效，请重新运行。",
+   WORKFLOW_FAILED: "工作流未能完成，请重新运行。",
+diff --git a/src/lib/types.ts b/src/lib/types.ts
+index 69f9f78..ad610dc 100644
+--- a/src/lib/types.ts
++++ b/src/lib/types.ts
+@@ -69,6 +69,37 @@ export interface CreateRunRequest {
+   user_constraints?: string | null;
+   quality_threshold: number;
+   max_iterations: number;
++  /**
++   * Which provider and model the run must execute on.
++   *
++   * Both or neither. The backend refuses half a pair rather than guessing the
++   * other half, so the form only ever sends them together.
++   */
++  provider_id?: string;
++  model_id?: string;
++}
++
++/** One selectable model. Public metadata only — never prices or endpoints. */
++export interface ModelOption {
++  model_id: string;
++  model_display_name: string;
++  capabilities?: Record<string, unknown> | null;
++}
++
++export interface ProviderOption {
++  provider_id: string;
++  provider_display_name: string;
++  models: ModelOption[];
++}
++
++/**
++ * The backend's catalog of runnable combinations.
++ *
++ * The only authoritative list: the frontend keeps no hard-coded copy, so it can
++ * never offer a combination this backend cannot actually run.
++ */
++export interface ProviderCatalogResponse {
++  providers: ProviderOption[];
+ }
+ 
+ export interface ResumeRunRequest {
+@@ -164,6 +195,17 @@ export interface RunSnapshot {
+   user_idea: string;
+   target_audience?: string | null;
+   user_constraints?: string | null;
++  /**
++   * What this run was bound to at creation, and the catalog's display names as
++   * they read at that moment.
++   *
++   * Nullable throughout: runs recorded before run-level selection existed have
++   * none of it, and the UI shows that gap rather than inventing a combination.
++   */
++  provider_id?: string | null;
++  model_id?: string | null;
++  provider_display_name?: string | null;
++  model_display_name?: string | null;
+   output_language?: string;
+   current_iteration: number;
+   max_iterations: number;
+diff --git a/src/test/fixtures.ts b/src/test/fixtures.ts
+index 4f57a67..e69ca0f 100644
+--- a/src/test/fixtures.ts
++++ b/src/test/fixtures.ts
+@@ -3,6 +3,7 @@ import type {
+   FeedbackItem,
+   FeedbackSeverity,
+   PRDVersion,
++  ProviderCatalogResponse,
+   RevisionItem,
+   RevisionPlan,
+   RoleReview,
+@@ -14,6 +15,44 @@ import type {
+ 
+ export const RUN_ID = "0c98322f-51a5-47f0-8091-d8152df0e680";
+ 
++/**
++ * A deterministic stand-in for the backend catalog.
++ *
++ * Two providers, so a test can prove the model list is scoped to the chosen one;
++ * fixed order, so nothing here depends on how the backend happens to sort.
++ */
++export const PROVIDER_CATALOG: ProviderCatalogResponse = {
++  providers: [
++    {
++      provider_id: "fixture-alpha",
++      provider_display_name: "Fixture Alpha",
++      models: [
++        {
++          model_id: "alpha-standard",
++          model_display_name: "Alpha 标准版",
++          capabilities: null,
++        },
++        {
++          model_id: "alpha-fast",
++          model_display_name: "Alpha 快速版",
++          capabilities: null,
++        },
++      ],
++    },
++    {
++      provider_id: "fixture-beta",
++      provider_display_name: "Fixture Beta",
++      models: [
++        {
++          model_id: "beta-standard",
++          model_display_name: "Beta 标准版",
++          capabilities: null,
++        },
++      ],
++    },
++  ],
++};
++
+ export function makeFeedback(
+   severity: FeedbackSeverity = "should_fix",
+   issue = "Add an edge case",
+@@ -124,6 +163,12 @@ export function makeSnapshot(
+     user_idea: "Build a podcast micro-subscription product.",
+     target_audience: "Podcast listeners",
+     user_constraints: "Mobile-first",
++    // A run created after run-level selection existed. Old runs are modelled by
++    // overriding all four with null.
++    provider_id: "fixture-alpha",
++    provider_display_name: "Fixture Alpha",
++    model_id: "alpha-standard",
++    model_display_name: "Alpha 标准版",
+     current_iteration: 1,
+     max_iterations: 3,
+     quality_threshold: 85,
