@@ -1,0 +1,38 @@
+extension:
+  id: round-01-zcode-extension
+  type: post-freeze-extension
+  date: 2026-09-10
+  original_round: 1
+  original_round_tag: ai-coding-benchmark-round1
+
+baseline:
+  tag: ai-coding-benchmark-v1
+  commit: 0edc069
+
+prompt:
+  file: ../../prompts/round-01-planning.md
+  sha256: 73db9b877cca5ac39bd338ea4672398470b68b042f0133904f4fd57e4e832149
+
+run:
+  id: zcode-glm53
+  raw_file: zcode-glm53.md
+  raw_sha256: af05d19f44668903da9e4a735bc869e9ccac441ba11ccf2fc38be24001876c1d
+  product: ZCode Desktop App
+  harness_version: 3.11.2
+  model: GLM-5.3
+  provider: unknown
+  reasoning: highest
+  permission_mode: confirm-before-changes
+  branch: bench/provider-zcode
+  duration_sec: 188
+  context_used_k: null
+  context_limit_k: null
+  input_tokens: null
+  output_tokens: null
+  cost_cny: null
+  manual_interventions: 0
+  files_changed: 0
+  lines_added: 0
+  lines_deleted: 0
+  completion_status: completed
+  notes: "Post-freeze Round 1 extension. Worktree was clean after completion; original frozen Round 1 ranking remains unchanged."

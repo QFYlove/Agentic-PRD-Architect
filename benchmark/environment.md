@@ -55,6 +55,15 @@ Round 2 operational note: permission mode was changed from Ask to “Approve for
 - Provider: Cursor
 - Reasoning: Medium
 
+### ZCode — Round 1 post-freeze extension
+
+- Version: 3.11.2
+- Model: GLM-5.3
+- Interface: ZCode Desktop App
+- Provider: not exposed / unknown
+- Reasoning: UI setting `最高` (`highest`)
+- Round 1 extension permission mode: `变更前确认` (`confirm-before-changes`)
+
 ## Round 2 Operator-Evaluator Environment Notes
 
 The uniform Playwright evaluation exposed a shared baseline/configuration path issue on Cursor baseline, Codex, Claude, and K3:

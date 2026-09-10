@@ -23,6 +23,10 @@ Systems currently included:
 - Kimi Code + Kimi K2.6
 - Kimi Code + Kimi K3
 
+Post-freeze extension system:
+
+- ZCode + GLM-5.3
+
 The benchmark evaluates end-to-end system behavior rather than attempting to claim a pure harness-only or model-only comparison.
 
 ## Worktrees
@@ -40,6 +44,7 @@ Experimental worktrees / branches:
 | Cursor | `Agentic-PRD-Architect-cursor` | `bench/provider-cursor` |
 | Kimi K2.6 | `Agentic-PRD-Architect-kimi` | `bench/provider-kimi` |
 | Kimi K3 | `Agentic-PRD-Architect-kimi-k3` | `bench/provider-kimi-k3` |
+| ZCode | `Agentic-PRD-Architect-zcode` | `bench/provider-zcode` |
 
 All experiments compare against `ai-coding-benchmark-v1` / `0edc069`.
 
@@ -76,6 +81,24 @@ Key quantitative evidence:
 - Kimi K3: observed cost CNY 6.50, duration/tokens unavailable, 0 semantic interventions.
 
 Round 1 report: `benchmark/rounds/round-01-planning.md`.
+
+### Round 1 post-freeze extension — ZCode + GLM-5.3
+
+- ZCode Desktop App 3.11.2
+- Model: GLM-5.3
+- Reasoning UI setting: `最高`
+- Permission mode: `变更前确认`
+- Baseline: `0edc069`
+- Duration: 188 sec
+- Semantic manual interventions: 0
+- Repository changes: 0; worktree clean after completion
+- Completion: completed
+- Reference planning-quality position: between Claude and Cursor
+
+This is an extension run only and does not modify the frozen Round 1 ranking.
+
+Report: `benchmark/rounds/round-01-zcode-extension.md`.
+Raw evidence: `benchmark/raw/round-01/zcode-glm53.md`.
 
 ## Round 2 — Complete / Frozen
 

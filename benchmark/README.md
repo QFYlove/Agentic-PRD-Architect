@@ -4,13 +4,17 @@ This directory contains a real-project benchmark of multiple AI coding systems w
 
 ## Systems
 
-Currently evaluated end-to-end configurations:
+Original frozen five-system set:
 
 - Claude Code + Opus 5
 - Codex + GPT-5.6 Sol
 - Cursor + Grok 4.6 Medium
 - Kimi Code + Kimi K2.6
 - Kimi Code + Kimi K3
+
+Post-freeze extension systems:
+
+- ZCode + GLM-5.3
 
 ## Benchmark Baseline
 
@@ -45,6 +49,16 @@ Planning-quality ranking:
 5. Kimi Code + Kimi K2.6
 
 See `rounds/round-01-planning.md`.
+
+#### Round 1 post-freeze extension — ZCode + GLM-5.3
+
+Status: **complete**
+
+ZCode Desktop App 3.11.2 + GLM-5.3 (`最高`) was run later against the same baseline and original Round 1 prompt. It completed in 188 sec with 0 semantic interventions and left the worktree clean.
+
+This extension does not alter the frozen five-system Round 1 ranking. Its qualitative reference position is between Claude and Cursor.
+
+See `rounds/round-01-zcode-extension.md`.
 
 ### Round 2 — Implementation
 
