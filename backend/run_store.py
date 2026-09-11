@@ -107,7 +107,7 @@ class InMemoryRunStore:
             for run_id, run in self._runs.items():
                 if (
                     run.status in TERMINAL_RUN_STATUSES
-                    and now - run.updated_at >= self.ttl
+                    and now - run.created_at >= self.ttl
                 ):
                     expired.append(run_id)
             for run_id in expired:
@@ -222,7 +222,7 @@ class SQLiteRunStore(InMemoryRunStore):
             self._runs[snapshot.run_id] = snapshot
             self._locks[snapshot.run_id] = asyncio.Lock()
         for snapshot in interrupted:
-            self._persist(snapshot)
+            self._runs[snapshot.run_id] = snapshot
         self._enforce_retention_on_load()
 
     def _enforce_retention_on_load(self) -> None:

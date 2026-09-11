@@ -111,7 +111,6 @@ class RunManager:
         return expired
 
     def _release_run_resources(self, run_id: UUID) -> None:
-        self.event_store.remove_run(run_id)
         self.cancel_signals.pop(run_id, None)
         self.resume_signals.pop(run_id, None)
         self._active_started.pop(run_id, None)
