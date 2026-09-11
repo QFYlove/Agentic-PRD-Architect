@@ -1,0 +1,55 @@
+===== codex =====
+
+### ruff format
+Would reformat: backend/tests/test_node_timings.py
+1 file would be reformatted, 41 files already formatted
+exit=1
+
+### ruff check
+I001 [*] Import block is un-sorted or un-formatted
+  --> backend/tests/test_node_timings.py:9:1
+   |
+ 7 |   """
+ 8 |
+ 9 | / from __future__ import annotations
+10 | |
+11 | | from collections.abc import AsyncIterator
+12 | |
+13 | | import pytest
+14 | |
+15 | | from backend.prd_document import PRD_COMPLETION_MARKER
+16 | | from backend.prompts import (
+17 | |     COMPOSITION_RULES,
+18 | |     GENERATOR_SYSTEM_PROMPT,
+19 | |     OPTIMIZER_SYSTEM_PROMPT,
+20 | | )
+21 | | from backend.providers.base import ProviderTextEvent
+22 | | from backend.providers.mock import MockLLMProvider
+23 | | from backend.schemas import (
+24 | |     CreateRunRequest,
+25 | |     RevisionPlan,
+26 | |     RunStatus,
+27 | |     TokenUsage,
+28 | | )
+29 | | from backend.tests.helpers import make_manager
+30 | |
+31 | | from backend.language import DEFAULT_OUTPUT_LANGUAGE
+   | |____________________________________________________^
+   |
+help: Organize imports
+
+Found 1 error.
+[*] 1 fixable with the `--fix` option.
+exit=1
+
+### mypy
+Success: no issues found in 20 source files
+exit=0
+
+### pytest
+........................................................................ [ 25%]
+........................................................................ [ 51%]
+........................................................................ [ 77%]
+.............................................................            [100%]
+277 passed in 8.43s
+exit=0

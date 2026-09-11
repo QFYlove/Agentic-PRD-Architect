@@ -1,0 +1,90 @@
+From 9ab849866ba2b8cf31d5303876c4daa2956454ac Mon Sep 17 00:00:00 2001
+From: QFYlove <174423370+QFYlove@users.noreply.github.com>
+Date: Fri, 11 Sep 2026 14:41:07 +0800
+Subject: [PATCH] benchmark: freeze round 3 codex result
+
+---
+ backend/run_manager.py          |  1 +
+ backend/run_store.py            |  4 ++--
+ backend/tests/test_run_store.py | 24 ++++++++++++++++++++++++
+ 3 files changed, 27 insertions(+), 2 deletions(-)
+
+diff --git a/backend/run_manager.py b/backend/run_manager.py
+index dc0871c..ef243e0 100644
+--- a/backend/run_manager.py
++++ b/backend/run_manager.py
+@@ -111,6 +111,7 @@ class RunManager:
+         return expired
+ 
+     def _release_run_resources(self, run_id: UUID) -> None:
++        self.event_store.remove_run(run_id)
+         self.cancel_signals.pop(run_id, None)
+         self.resume_signals.pop(run_id, None)
+         self._active_started.pop(run_id, None)
+diff --git a/backend/run_store.py b/backend/run_store.py
+index 361280d..8972296 100644
+--- a/backend/run_store.py
++++ b/backend/run_store.py
+@@ -107,7 +107,7 @@ class InMemoryRunStore:
+             for run_id, run in self._runs.items():
+                 if (
+                     run.status in TERMINAL_RUN_STATUSES
+-                    and now - run.created_at >= self.ttl
++                    and now - run.updated_at >= self.ttl
+                 ):
+                     expired.append(run_id)
+             for run_id in expired:
+@@ -222,7 +222,7 @@ class SQLiteRunStore(InMemoryRunStore):
+             self._runs[snapshot.run_id] = snapshot
+             self._locks[snapshot.run_id] = asyncio.Lock()
+         for snapshot in interrupted:
+-            self._runs[snapshot.run_id] = snapshot
++            self._persist(snapshot)
+         self._enforce_retention_on_load()
+ 
+     def _enforce_retention_on_load(self) -> None:
+diff --git a/backend/tests/test_run_store.py b/backend/tests/test_run_store.py
+index 6ac12e3..7af6bad 100644
+--- a/backend/tests/test_run_store.py
++++ b/backend/tests/test_run_store.py
+@@ -52,6 +52,20 @@ async def test_store_cleanup_only_removes_expired_terminal_runs() -> None:
+     assert (await store.get(active.run_id)).status is RunStatus.PAUSED
+ 
+ 
++async def test_store_cleanup_ttl_uses_last_update_time() -> None:
++    created_at = datetime(2026, 7, 26, tzinfo=UTC)
++    clock = [created_at + timedelta(seconds=61)]
++    store = InMemoryRunStore(max_runs=5, ttl_seconds=60, now=lambda: clock[0])
++    completed = snapshot(RunStatus.COMPLETED)
++    completed.created_at = created_at
++    completed.updated_at = created_at + timedelta(seconds=50)
++    await store.create(completed)
++
++    assert await store.cleanup_expired() == []
++    clock[0] = completed.updated_at + timedelta(seconds=60)
++    assert await store.cleanup_expired() == [completed.run_id]
++
++
+ async def test_sqlite_store_persists_snapshots_and_lists_recent_runs(
+     tmp_path: Path,
+ ) -> None:
+@@ -103,6 +117,16 @@ async def test_sqlite_store_marks_interrupted_runs_failed(tmp_path: Path) -> Non
+     assert recovered.active_node is None
+     await restored.close()
+ 
++    reopened = SQLiteRunStore(
++        database_path=database_path,
++        max_runs=5,
++        ttl_seconds=60,
++    )
++    stable = await reopened.get(active.run_id)
++    assert stable.status is RunStatus.FAILED
++    assert stable.error is not None and stable.error.code == "RUN_INTERRUPTED"
++    await reopened.close()
++
+ 
+ async def _seed_terminal_runs(
+     database_path: str,
+-- 
+2.39.5 (Apple Git-154)
+

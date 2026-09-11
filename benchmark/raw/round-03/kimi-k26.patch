@@ -1,0 +1,228 @@
+From adfebd76d917411dbdafa37031b00df1c78066b5 Mon Sep 17 00:00:00 2001
+From: QFYlove <174423370+QFYlove@users.noreply.github.com>
+Date: Fri, 11 Sep 2026 14:41:08 +0800
+Subject: [PATCH] benchmark: freeze round 3 kimi-k26 result
+
+---
+ backend/run_manager.py             |  2 +
+ backend/run_store.py               |  3 +-
+ backend/tests/test_node_timings.py |  9 ++--
+ backend/tests/test_run_manager.py  | 37 +++++++++++++++-
+ backend/tests/test_run_store.py    | 68 ++++++++++++++++++++++++++++++
+ 5 files changed, 111 insertions(+), 8 deletions(-)
+
+diff --git a/backend/run_manager.py b/backend/run_manager.py
+index dc0871c..e83c89e 100644
+--- a/backend/run_manager.py
++++ b/backend/run_manager.py
+@@ -107,6 +107,7 @@ class RunManager:
+         expired = await self.run_store.cleanup_expired()
+         for run_id in expired:
+             self._release_run_resources(run_id)
++            self.event_store.remove_run(run_id)
+             log_event(LOGGER, "run_resources_cleaned", run_id=run_id)
+         return expired
+ 
+@@ -128,6 +129,7 @@ class RunManager:
+                 raise RunCapacityError
+             for evicted in await self.run_store.make_room():
+                 self._release_run_resources(evicted)
++                self.event_store.remove_run(evicted)
+                 log_event(LOGGER, "run_evicted_for_retention", run_id=evicted)
+             run_id = uuid4()
+             now = utc_now()
+diff --git a/backend/run_store.py b/backend/run_store.py
+index 361280d..f31675d 100644
+--- a/backend/run_store.py
++++ b/backend/run_store.py
+@@ -107,7 +107,7 @@ class InMemoryRunStore:
+             for run_id, run in self._runs.items():
+                 if (
+                     run.status in TERMINAL_RUN_STATUSES
+-                    and now - run.created_at >= self.ttl
++                    and now - run.updated_at >= self.ttl
+                 ):
+                     expired.append(run_id)
+             for run_id in expired:
+@@ -218,6 +218,7 @@ class SQLiteRunStore(InMemoryRunStore):
+                 snapshot.active_node = None
+                 snapshot.completed_at = utc_now()
+                 snapshot.updated_at = snapshot.completed_at
++                self._persist(snapshot)
+                 interrupted.append(snapshot)
+             self._runs[snapshot.run_id] = snapshot
+             self._locks[snapshot.run_id] = asyncio.Lock()
+diff --git a/backend/tests/test_node_timings.py b/backend/tests/test_node_timings.py
+index 176f5eb..667e778 100644
+--- a/backend/tests/test_node_timings.py
++++ b/backend/tests/test_node_timings.py
+@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
+ 
+ import pytest
+ 
++from backend.language import DEFAULT_OUTPUT_LANGUAGE
+ from backend.prd_document import PRD_COMPLETION_MARKER
+ from backend.prompts import (
+     COMPOSITION_RULES,
+@@ -28,11 +29,9 @@ from backend.schemas import (
+ )
+ from backend.tests.helpers import make_manager
+ 
+-from backend.language import DEFAULT_OUTPUT_LANGUAGE
+-
+ 
+ async def test_every_node_call_records_its_own_duration() -> None:
+-    """"Which node is slow" is only answerable if the calls stay separate."""
++    """ "Which node is slow" is only answerable if the calls stay separate."""
+     manager = make_manager()
+     created = await manager.create_run(
+         CreateRunRequest(user_idea="Build a product whose timings are recorded.")
+@@ -243,9 +242,7 @@ async def test_a_failed_v2_leaves_v1_its_reviews_and_its_plan_intact() -> None:
+     assert result.current_iteration == 2
+ 
+ 
+-@pytest.mark.parametrize(
+-    "prompt", [GENERATOR_SYSTEM_PROMPT, OPTIMIZER_SYSTEM_PROMPT]
+-)
++@pytest.mark.parametrize("prompt", [GENERATOR_SYSTEM_PROMPT, OPTIMIZER_SYSTEM_PROMPT])
+ def test_no_prompt_leaks_provider_or_process_detail(prompt: str) -> None:
+     assert "api_key" not in prompt.lower()
+     assert "traceback" not in prompt.lower()
+diff --git a/backend/tests/test_run_manager.py b/backend/tests/test_run_manager.py
+index 6ec58bf..5ca0fe7 100644
+--- a/backend/tests/test_run_manager.py
++++ b/backend/tests/test_run_manager.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import asyncio
++from pathlib import Path
+ 
+ import pytest
+ 
+@@ -12,7 +13,7 @@ from backend.errors import (
+ )
+ from backend.providers.mock import MockLLMProvider
+ from backend.schemas import CreateRunRequest, RunEventType, RunStatus
+-from backend.tests.helpers import make_manager, make_settings
++from backend.tests.helpers import make_manager, make_settings, make_sqlite_manager
+ from backend.tests.test_workflow import wait_for_status
+ 
+ 
+@@ -219,3 +220,37 @@ async def test_retention_never_evicts_an_active_run() -> None:
+     await manager.cancel_run(active.run_id)
+     await manager.wait_for_completion(active.run_id, wait_seconds=5)
+     await manager.shutdown()
++
++
++async def test_sqlite_retention_eviction_deletes_events_at_runtime(
++    tmp_path: Path,
++) -> None:
++    """Evicting a run via retention must drop its persisted events immediately."""
++    database_path = str(tmp_path / "sqlite-eviction.sqlite3")
++    manager = make_sqlite_manager(
++        database_path=database_path,
++        settings=make_settings(max_retained_runs=1),
++    )
++    first = await manager.create_run(
++        CreateRunRequest(user_idea="Build the first sqlite retention run.")
++    )
++    await manager.wait_for_completion(first.run_id, wait_seconds=5)
++
++    second = await manager.create_run(
++        CreateRunRequest(user_idea="Build the second sqlite retention run.")
++    )
++    await manager.wait_for_completion(second.run_id, wait_seconds=5)
++
++    with pytest.raises(RunNotFoundError):
++        await manager.get_run(first.run_id)
++    with pytest.raises(RunNotFoundError):
++        manager.event_store.latest_sequence(first.run_id)
++
++    assert (
++        manager.event_store._connection.execute(
++            "SELECT COUNT(*) FROM run_events WHERE run_id = ?",
++            (str(first.run_id),),
++        ).fetchone()[0]
++        == 0
++    )
++    await manager.shutdown()
+diff --git a/backend/tests/test_run_store.py b/backend/tests/test_run_store.py
+index 6ac12e3..f58d335 100644
+--- a/backend/tests/test_run_store.py
++++ b/backend/tests/test_run_store.py
+@@ -221,3 +221,71 @@ async def test_load_keeps_all_runs_when_history_fits_under_the_cap(
+     assert set(await restored.run_ids()) == {snap.run_id for snap in created}
+     assert await restored.make_room() == []
+     await restored.close()
++
++
++async def test_cleanup_uses_updated_at_for_long_running_runs() -> None:
++    """A run created long ago but finished recently must not expire early."""
++    now = datetime(2026, 7, 26, tzinfo=UTC)
++    clock = [now]
++    store = InMemoryRunStore(
++        max_runs=5,
++        ttl_seconds=60,
++        now=lambda: clock[0],
++    )
++    run = snapshot(RunStatus.COMPLETED)
++    run.created_at = now - timedelta(days=30)
++    run.updated_at = now
++    await store.create(run)
++    clock[0] += timedelta(seconds=31)
++
++    expired = await store.cleanup_expired()
++    assert expired == []
++
++    clock[0] += timedelta(seconds=30)
++    expired = await store.cleanup_expired()
++    assert expired == [run.run_id]
++
++
++async def test_sqlite_recovery_is_persisted_and_idempotent(tmp_path: Path) -> None:
++    """Interrupted runs recovered on startup must stay stable across restarts."""
++    database_path = str(tmp_path / "recovery.sqlite3")
++    store = SQLiteRunStore(
++        database_path=database_path,
++        max_runs=5,
++        ttl_seconds=60,
++    )
++    active = snapshot(RunStatus.GENERATING)
++    active.active_node = "generator"
++    await store.create(active)
++    await store.close()
++
++    first = SQLiteRunStore(
++        database_path=database_path,
++        max_runs=5,
++        ttl_seconds=60,
++    )
++    recovered = await first.get(active.run_id)
++    assert recovered.status is RunStatus.FAILED
++    assert recovered.error is not None
++    assert recovered.error.code == "RUN_INTERRUPTED"
++    # The database row itself must now reflect the failed state.
++    row = first._connection.execute(
++        "SELECT snapshot_json FROM runs WHERE run_id = ?",
++        (str(active.run_id),),
++    ).fetchone()
++    assert row is not None
++    persisted = RunSnapshot.model_validate_json(row[0])
++    assert persisted.status is RunStatus.FAILED
++    await first.close()
++
++    # A second restart must not re-recover the run.
++    second = SQLiteRunStore(
++        database_path=database_path,
++        max_runs=5,
++        ttl_seconds=60,
++    )
++    again = await second.get(active.run_id)
++    assert again.status is RunStatus.FAILED
++    assert again.completed_at == recovered.completed_at
++    assert again.updated_at == recovered.updated_at
++    await second.close()
+-- 
+2.39.5 (Apple Git-154)
+

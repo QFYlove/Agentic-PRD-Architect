@@ -1,6 +1,6 @@
 # AI Coding Benchmark — Working Handoff
 
-Last updated: 2026-09-10
+Last updated: 2026-09-11
 
 ## Project
 
@@ -13,9 +13,9 @@ Benchmark baseline:
 
 ## Goal
 
-Evaluate real AI coding systems on a real repository across multiple rounds.
+Evaluate real AI coding systems on a real repository across multiple task phases.
 
-Systems currently included:
+Core systems:
 
 - Claude Code + Opus 5
 - Codex + GPT-5.6 Sol
@@ -29,25 +29,6 @@ Post-freeze extension system:
 
 The benchmark evaluates end-to-end system behavior rather than attempting to claim a pure harness-only or model-only comparison.
 
-## Worktrees
-
-Main:
-
-`~/Documents/Agentic-PRD-Architect`
-
-Experimental worktrees / branches:
-
-| System | Worktree | Branch |
-|---|---|---|
-| Claude | `Agentic-PRD-Architect-claude` | `bench/provider-claude` |
-| Codex | `Agentic-PRD-Architect-codex` | `bench/provider-codex` |
-| Cursor | `Agentic-PRD-Architect-cursor` | `bench/provider-cursor` |
-| Kimi K2.6 | `Agentic-PRD-Architect-kimi` | `bench/provider-kimi` |
-| Kimi K3 | `Agentic-PRD-Architect-kimi-k3` | `bench/provider-kimi-k3` |
-| ZCode | `Agentic-PRD-Architect-zcode` | `bench/provider-zcode` |
-
-All experiments compare against `ai-coding-benchmark-v1` / `0edc069`.
-
 ## Benchmark Structure
 
 - `benchmark/README.md` — benchmark overview and round status
@@ -56,11 +37,11 @@ All experiments compare against `ai-coding-benchmark-v1` / `0edc069`.
 - `benchmark/metrics.csv` — quantitative results
 - `benchmark/prompts/` — exact prompts
 - `benchmark/specs/` — frozen canonical specifications
-- `benchmark/raw/` — unedited agent outputs and run metadata
+- `benchmark/raw/` — raw outputs, patches, evaluator logs, manifests
 - `benchmark/rounds/` — per-round analysis
 - `benchmark/conclusions.md` — cross-round conclusions
 
-## Round 1 — Complete
+## Round 1 — Complete / Frozen
 
 Task: Run-level Provider / Model Selection — repository understanding and planning only. No code modification was allowed.
 
@@ -80,25 +61,24 @@ Key quantitative evidence:
 - Kimi K2.6: displayed context 126k / 256k, duration unavailable, 0 semantic interventions.
 - Kimi K3: observed cost CNY 6.50, duration/tokens unavailable, 0 semantic interventions.
 
-Round 1 report: `benchmark/rounds/round-01-planning.md`.
+Report: `benchmark/rounds/round-01-planning.md`.
 
-### Round 1 post-freeze extension — ZCode + GLM-5.3
+### Round 1 extension — ZCode + GLM-5.3
+
+Status: complete.
 
 - ZCode Desktop App 3.11.2
 - Model: GLM-5.3
-- Reasoning UI setting: `最高`
+- Reasoning UI: `最高`
 - Permission mode: `变更前确认`
 - Baseline: `0edc069`
 - Duration: 188 sec
 - Semantic manual interventions: 0
-- Repository changes: 0; worktree clean after completion
+- Repository changes: 0
 - Completion: completed
 - Reference planning-quality position: between Claude and Cursor
 
-This is an extension run only and does not modify the frozen Round 1 ranking.
-
-Report: `benchmark/rounds/round-01-zcode-extension.md`.
-Raw evidence: `benchmark/raw/round-01/zcode-glm53.md`.
+This extension does not modify the frozen original Round 1 ranking.
 
 ## Round 2 — Complete / Frozen
 
@@ -112,100 +92,212 @@ Frozen inputs:
 - canonical spec SHA-256: `4c6c7bc167262b80c1957362fe818934b4ff9e5a54e0fe2892e46b7184fd8a68`
 - implementation prompt SHA-256: `c6ad086d4d153d5f55c4e85ef12b3f83abbc0966e3469b16574c4c7fd5ec1446`
 
-Frozen evaluation priority:
+Final ranking:
 
-1. canonical correctness and critical safety/compatibility;
-2. post-run regression/evaluation;
-3. autonomy / semantic manual intervention;
-4. scope discipline / reviewability;
-5. efficiency: duration, code delta, measured cost/tokens.
+1. **Kimi Code + Kimi K3** — blocked; Canonical **Provisional PASS**
+2. **Claude Code + Opus 5** — partial; Canonical **PARTIAL**
+3. **Codex + GPT-5.6 Sol** — completed; Canonical **PARTIAL**
+4. **Kimi Code + Kimi K2.6** — completed; Canonical **PARTIAL**
+5. **Cursor + Grok 4.6 Medium** — blocked; **NOT IMPLEMENTED**
 
-Speed alone does not outrank correctness.
+Key findings:
 
-### Round 2 final ranking
+- green tests do not override substantive canonical gaps;
+- completion status and final code quality are separate signals;
+- quota/provider balance is part of end-to-end product reliability;
+- K3 vs K2.6 provided the strongest partially controlled comparison.
 
-1. **Kimi Code + Kimi K3** — blocked; Canonical **Provisional PASS**; strongest final implementation correctness, but heavy/slow and terminated by insufficient balance.
-2. **Claude Code + Opus 5** — partial; Canonical **PARTIAL**; extremely strong backend/canonical implementation, but final frontend regressions and no clean completion.
-3. **Codex + GPT-5.6 Sol** — completed; Canonical **PARTIAL**; smallest/reviewable meaningful patch and best completed convergence, but thinner canonical depth and required coverage.
-4. **Kimi Code + Kimi K2.6** — completed; Canonical **PARTIAL**; all operator gates executable/green, but different-pair concurrency and true per-model pricing were not actually established.
-5. **Cursor + Grok 4.6 Medium** — blocked; **NOT IMPLEMENTED**; free quota exhausted before any code change.
+Report: `benchmark/rounds/round-02-implementation.md`.
 
-### Round 2 code delta
+## Round 2 extension — ZCode + GLM-5.3
 
-| System | Files | Added | Deleted | Completion |
-|---|---:|---:|---:|---|
-| Claude Opus 5 | 23 | 2320 | 96 | partial |
-| Codex GPT-5.6 Sol | 15 | 563 | 18 | completed |
-| Cursor Grok 4.6 | 0 | 0 | 0 | blocked |
-| Kimi K2.6 | 31 | 1639 | 94 | completed |
-| Kimi K3 | 34 | 2551 | 59 | blocked |
+Status: **incomplete / blocked; continuation pending if desired**.
 
-### Round 2 observable efficiency notes
+Configuration:
 
-- Kimi K3: total T0-T1 unavailable. One frontend subagent alone used 49m35s, 132k tokens and 122 tool calls. Exact Round 2 monetary cost unavailable. Run stopped on insufficient provider balance.
-- Claude: reliable T0-T1 unavailable. Final visible context was 98.2k / 200k. Transcript ended before normal completion.
-- Codex: 21m35s; 15 files; +563/-18; normal completion.
-- Kimi K2.6: reliable T0-T1 unavailable; relatively large 31-file patch and extensive validation; exact time/cost unavailable.
-- Cursor: implementation duration is not meaningfully comparable because quota exhaustion occurred before code changes.
+- ZCode Desktop App 3.11.2
+- Model: GLM-5.3
+- Thinking: `最高`
+- Round 2 permission mode: `完全访问`
+- Same frozen baseline and Round 2 prompt
+- Do not switch to GLM-5.3-Flash mid-run
 
-Do not estimate missing duration/token/cost values.
+Observed execution:
 
-### Uniform post-run evaluator
+- first active segment: 850 sec, then quota exhausted;
+- second active segment: 213 sec, then quota exhausted again;
+- cumulative active execution observed so far: 1063 sec;
+- original first blocker T1 remains 850 sec;
+- waiting time for quota reset is excluded.
 
-The same operator-controlled gates were applied to all final worktrees:
+Current modified files in the unfinished ZCode worktree:
 
-```bash
-./.venv/bin/ruff format --check backend
-./.venv/bin/ruff check backend
-./.venv/bin/mypy backend
-./.venv/bin/python -m pytest backend/tests -p no:cacheprovider -q
-npm run typecheck
-npm run lint
-npm run test:run
-npm run build
-npx playwright test --project=chromium
-```
+- `backend/config.py`
+- `backend/errors.py`
+- `backend/run_manager.py`
+- `backend/schemas.py`
+- `backend/telemetry.py`
+- `backend/workflow.py`
+- `backend/provider_catalog.py` (new)
 
-| Gate | Claude | Codex | Cursor baseline | Kimi K2.6 | Kimi K3 |
-|---|---|---|---|---|---|
-| Ruff format | FAIL baseline | FAIL baseline | FAIL baseline | PASS | FAIL format |
-| Ruff check | FAIL baseline I001 | FAIL baseline I001 | FAIL baseline I001 | PASS | PASS |
-| mypy | PASS | PASS | PASS | PASS | PASS |
-| pytest | 308 passed | 279 passed | 276 passed | 300 passed | 307 passed |
-| frontend typecheck | FAIL (2) | PASS | PASS | PASS | PASS |
-| ESLint | FAIL | PASS | PASS | PASS | PASS |
-| Vitest | FAIL (2 failed / 182 passed) | 184 passed | 184 passed | 193 passed | 204 passed |
-| build | FAIL | PASS | PASS | PASS | PASS |
-| Playwright | infra_error | infra_error | infra_error | 23 passed | infra_error |
+Checkpoint evidence:
 
-Shared evaluator facts:
+- `~/Desktop/zcode-glm53-r2-blocked-at-850s.patch`
+- `~/Desktop/zcode-glm53-r2-blocked-2-active-1063s-full.patch`
 
-- Cursor baseline reproduced the `backend/tests/test_node_timings.py` Ruff problem, so matching Claude/Codex failures are baseline-attributed rather than feature regressions.
-- Cursor, Codex, Claude and K3 all hit the same Playwright web-server path problem: `.venvScriptspython.exe`. Record these as `infra_error`, not implementation test failures.
-- K2.6 changed the Playwright configuration and was the only worktree where the uniform operator E2E gate executed, passing 23 tests.
-- Temporary evaluator dependency symlinks used for the Cursor baseline rerun were removed afterward; Cursor returned to a clean unchanged worktree.
+The second checkpoint includes the untracked `backend/provider_catalog.py`.
 
-### Key Round 2 findings
+Do not delete or reset the ZCode worktree until this extension is either completed and archived or explicitly abandoned.
 
-- Green tests are not sufficient evidence of requirement correctness: K2.6's strongest visible gate result still missed the intended semantics of different-pair concurrency and per-model pricing.
-- Completion status and final code quality are separate signals: K3 was blocked but left the strongest canonical implementation; Claude was partial but left a very strong backend; Codex completed normally with thinner canonical coverage.
-- Product limits matter in end-to-end evaluation: Cursor free quota and K3 provider balance both affected the ability to finish.
-- K3 vs K2.6 is the strongest partially controlled comparison. The K3 advantage in Provider/Model interpretation, concurrency, and pricing appeared in both Round 1 planning and Round 2 implementation.
+This extension does not modify the frozen original Round 2 ranking.
 
-Round 2 report: `benchmark/rounds/round-02-implementation.md`.
+## Round 3 — Complete / Frozen
+
+Task: existing-code debugging and repair across Run lifecycle, persistence recovery, and resource/event cleanup.
+
+Original baseline: `0edc069`
+
+Buggy seed:
+
+- commit: `07445c45d3a28692524f6cd53676f004523b0424`
+- tree: `06938442d66bb9f04b904cdb2306e2dbb19a2cef`
+- tag: `ai-coding-benchmark-round3-seed`
+- ground-truth patch SHA-256: `ca3d9165274afd5dd1931d2654480c321fdd9339a5d40cee60adff63d61d5a1e`
+
+Exact prompt:
+
+- file: `benchmark/prompts/round-03-debugging-repair.md`
+- SHA-256: `a51fbf395e28854b9babd49cf87148d52ce52284bc1ac8d5853c01f9199c1f71`
+
+History isolation:
+
+The Claude, Codex, and Kimi Round 3 agent repositories were created from the buggy seed tree and re-initialized with one baseline commit so agents could not inspect the parent diff that injected the regressions.
+
+Final ranking:
+
+1. **Claude Code + Opus 5**
+2. **Codex + GPT-5.6 Sol**
+3. **Kimi Code + Kimi K2.6**
+
+Timing / code delta:
+
+| System | Duration | Files | Added | Deleted |
+|---|---:|---:|---:|---:|
+| Claude Opus 5 | 533 sec | 4 | 142 | 5 |
+| Codex GPT-5.6 Sol | 361 sec | 3 | 27 | 2 |
+| Kimi K2.6 | not recorded | 5 | 111 | 8 |
+
+Final commits:
+
+- Claude: `c506509864f81930ad610b538c1e82f58d47f677`
+- Codex: `9ab849866ba2b8cf31d5303876c4daa2956454ac`
+- Kimi K2.6: `adfebd76d917411dbdafa37031b00df1c78066b5`
+
+Final patch SHA-256:
+
+- Claude: `e6d48a10b1bcd066b817f05fe4376aca4eb4bf3685b3bf153eee0b45b92002a1`
+- Codex: `af4ff0335cc2a735a3b24a42b75f5814fc254c12c252dad39c82c064cbffe674`
+- Kimi K2.6: `adc15584b92ae770a7e30f974c5a19fa74dc4d0f57d7bfda8d2467694139903e`
+
+Buggy-seed backend baseline:
+
+- Ruff format: baseline fail
+- Ruff check: baseline fail
+- mypy: pass
+- pytest: 3 failed / 273 passed
+
+Final operator backend evaluator:
+
+| Gate | Claude | Codex | Kimi K2.6 |
+|---|---|---|---|
+| Ruff format | baseline fail | baseline fail | pass |
+| Ruff check | baseline fail | baseline fail | pass |
+| mypy | pass | pass | pass |
+| pytest | 279 passed | 277 passed | 279 passed |
+
+Final frontend/project gates:
+
+| Gate | Claude | Codex | Kimi K2.6 |
+|---|---|---|---|
+| typecheck | pass | pass | pass |
+| ESLint | pass | pass | pass |
+| Vitest | 184 passed | 184 passed | 184 passed |
+| build | pass | pass | pass |
+
+Independent repeated-restart acceptance:
+
+- SHA-256: `425ea1e8fd824f460b9edf8b7fb7e5c681b35771176a8fbf3e8d0d9be0cf3e5a`
+- Claude: pass
+- Codex: pass
+- Kimi K2.6: pass
+
+Important methodology limitation:
+
+The buggy seed already produced three backend failures, including direct signals for the TTL and event-cleanup regressions. Round 3 is therefore a regression-repair benchmark rather than a fully hidden fault-discovery benchmark.
+
+The repeated-restart probe was authored after the runs and is recorded as an independent acceptance check, not a pre-frozen hidden test.
+
+Report: `benchmark/rounds/round-03-debugging-repair.md`.
+
+## Round 3 Temporary Repositories
+
+Independent Round 3 repositories:
+
+- `~/Documents/Agentic-PRD-Architect-r3-claude`
+- `~/Documents/Agentic-PRD-Architect-r3-codex`
+- `~/Documents/Agentic-PRD-Architect-r3-kimi-k26`
+- `~/Documents/Agentic-PRD-Architect-r3-seed`
+
+Do not delete these until the Round 3 evidence has been committed/tagged in the main repository and any desired final Git bundles have been created.
 
 ## Operational Notes
 
 - Permission approvals/mode changes used only to unblock tool execution are operational and do not count as semantic manual interventions.
-- Codex switched from Ask to “Approve for me” during the run; record as a runtime configuration deviation, not a semantic intervention.
-- Do not selectively repair or rerun Round 2 systems after T1. The frozen worktrees/results are the Round 2 evidence.
+- Do not estimate missing duration/token/cost values.
+- Do not selectively rerun frozen systems to improve rankings.
+- Do not merge the Round 3 buggy seed into production.
+- Kimi's unrelated `test_node_timings.py` Ruff cleanup is preserved as delivered evidence and treated as minor scope creep.
+- The first Kimi frontend evaluator attempt was contaminated by a temporary `node_modules.round3-backup` directory inside the repository. That attempt is discarded; the clean rerun passed.
 
-## Current Next Action
+## Current Next Actions
 
-Round 2 is complete. Do not modify the frozen Round 2 spec/protocol to improve these results.
+### 1. Freeze Round 3 evidence in the main repository
 
-Before starting a new benchmark round:
+After the updated benchmark documents and `metrics.csv` are in place:
 
-1. commit/archive the updated benchmark documentation and raw evidence;
-2. choose a genuinely new task/phase for Round 3;
-3. freeze the next round's baseline, prompt, and evaluation procedure before the first run.
+```bash
+git add benchmark
+git diff --cached --stat
+git status --short
+```
+
+Then commit and tag:
+
+```bash
+git commit -m "benchmark: freeze round 3 results and evidence"
+git tag -a ai-coding-benchmark-round3 -m "Freeze Round 3 debugging and repair benchmark"
+```
+
+Push the commit and tag after verification.
+
+### 2. Finish or explicitly abandon the ZCode Round 2 extension
+
+If continuing, use the same ZCode task, worktree, GLM-5.3 model, and configuration. Do not mix models inside the existing run.
+
+Once complete, archive it strictly as a post-freeze Round 2 extension.
+
+### 3. Archive and remove temporary Round 3 repositories
+
+After freeze/tag and optional Git-bundle creation, the temporary Round 3 repositories can be deleted.
+
+### 4. Move to production integration
+
+The competitive benchmark is finished after Round 3.
+
+Do not merge a benchmark “winner” wholesale. Instead:
+
+1. compare candidate diffs by module;
+2. select the strongest semantics and regression tests;
+3. port/cherry-pick/reimplement selectively;
+4. run a fresh non-benchmark product acceptance pass;
+5. merge only the production-ready result into the formal project branch.

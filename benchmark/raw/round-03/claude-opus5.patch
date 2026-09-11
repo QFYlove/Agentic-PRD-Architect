@@ -1,0 +1,227 @@
+From c506509864f81930ad610b538c1e82f58d47f677 Mon Sep 17 00:00:00 2001
+From: QFYlove <174423370+QFYlove@users.noreply.github.com>
+Date: Fri, 11 Sep 2026 14:41:07 +0800
+Subject: [PATCH] benchmark: freeze round 3 claude result
+
+---
+ backend/run_manager.py                      |  5 ++
+ backend/run_store.py                        | 21 +++++--
+ backend/tests/test_prd_delta_persistence.py | 52 ++++++++++++++++
+ backend/tests/test_run_store.py             | 69 +++++++++++++++++++++
+ 4 files changed, 142 insertions(+), 5 deletions(-)
+
+diff --git a/backend/run_manager.py b/backend/run_manager.py
+index dc0871c..20edf73 100644
+--- a/backend/run_manager.py
++++ b/backend/run_manager.py
+@@ -119,6 +119,11 @@ class RunManager:
+         for key in [key for key in self._node_started if key[0] == run_id]:
+             self._node_started.pop(key, None)
+         self.tasks.pop(run_id, None)
++        # A run removed by TTL or retention must not leave its event stream
++        # behind. Otherwise the in-memory buffer, sequence counter, condition,
++        # and persisted event rows outlive the run: replay/subscribe would keep
++        # serving a "ghost" stream for a run the store no longer knows about.
++        self.event_store.remove_run(run_id)
+ 
+     async def create_run(self, request: CreateRunRequest) -> RunSnapshot:
+         if not self._accepting:
+diff --git a/backend/run_store.py b/backend/run_store.py
+index 361280d..3cd915c 100644
+--- a/backend/run_store.py
++++ b/backend/run_store.py
+@@ -107,7 +107,12 @@ class InMemoryRunStore:
+             for run_id, run in self._runs.items():
+                 if (
+                     run.status in TERMINAL_RUN_STATUSES
+-                    and now - run.created_at >= self.ttl
++                    # TTL counts from the last meaningful state update, not from
++                    # creation: a run that executed for hours and only just
++                    # reached a terminal state must live out its full retention
++                    # window, rather than expiring early because it was created
++                    # long ago.
++                    and now - run.updated_at >= self.ttl
+                 ):
+                     expired.append(run_id)
+             for run_id in expired:
+@@ -200,7 +205,7 @@ class SQLiteRunStore(InMemoryRunStore):
+         self._load_snapshots()
+ 
+     def _load_snapshots(self) -> None:
+-        interrupted: list[RunSnapshot] = []
++        interrupted: list[UUID] = []
+         rows = self._connection.execute(
+             "SELECT snapshot_json FROM runs ORDER BY updated_at DESC"
+         ).fetchall()
+@@ -218,12 +223,18 @@ class SQLiteRunStore(InMemoryRunStore):
+                 snapshot.active_node = None
+                 snapshot.completed_at = utc_now()
+                 snapshot.updated_at = snapshot.completed_at
+-                interrupted.append(snapshot)
++                interrupted.append(snapshot.run_id)
+             self._runs[snapshot.run_id] = snapshot
+             self._locks[snapshot.run_id] = asyncio.Lock()
+-        for snapshot in interrupted:
+-            self._runs[snapshot.run_id] = snapshot
+         self._enforce_retention_on_load()
++        # Persist the recovered terminal state back to disk. Without this the
++        # database keeps the original non-terminal snapshot, so every later
++        # restart re-runs interruption recovery: it would resurface as a fresh
++        # RUN_INTERRUPTED failure and reset completed_at/updated_at each time.
++        # Only runs that survived retention are still present in ``self._runs``.
++        for run_id in interrupted:
++            if run_id in self._runs:
++                self._persist(self._runs[run_id])
+ 
+     def _enforce_retention_on_load(self) -> None:
+         """Trim a database that holds more runs than ``max_runs`` allows.
+diff --git a/backend/tests/test_prd_delta_persistence.py b/backend/tests/test_prd_delta_persistence.py
+index ce5e44f..15f97e3 100644
+--- a/backend/tests/test_prd_delta_persistence.py
++++ b/backend/tests/test_prd_delta_persistence.py
+@@ -231,3 +231,55 @@ async def test_severity_counts_survive_a_restart_unchanged(tmp_path: Path) -> No
+     )
+     restored.event_store.close()
+     await restored.run_store.close()
++
++
++async def test_ttl_cleanup_deletes_persisted_events_of_removed_run(
++    tmp_path: Path,
++) -> None:
++    """A run removed by TTL must leave no persisted events or ghost stream.
++
++    Cleanup removes the run from the store; the associated event rows and the
++    in-memory stream state must go with it, so nothing can replay or subscribe
++    to a run the store no longer knows about.
++    """
++    from datetime import timedelta
++
++    from backend.errors import RunNotFoundError
++    from backend.schemas import utc_now
++
++    database_path = str(tmp_path / "ttl-events.sqlite3")
++    manager = make_sqlite_manager(
++        database_path=database_path,
++        settings=make_settings(database_path=database_path, run_ttl_seconds=60),
++    )
++    created = await manager.create_run(
++        CreateRunRequest(user_idea="Build a TTL event cleanup product.")
++    )
++    await manager.wait_for_completion(created.run_id, wait_seconds=10)
++
++    # The finished run has persisted, replayable events before cleanup.
++    assert manager.event_store.latest_sequence(created.run_id) > 0
++    persisted_before = manager.event_store._connection.execute(
++        "SELECT COUNT(*) FROM run_events WHERE run_id = ?",
++        (str(created.run_id),),
++    ).fetchone()[0]
++    assert persisted_before > 0
++
++    manager.run_store._now = lambda: utc_now() + timedelta(seconds=61)
++    expired = await manager.cleanup_once()
++
++    assert expired == [created.run_id]
++    # No ghost in-memory stream state remains.
++    assert created.run_id not in manager.event_store._events
++    assert created.run_id not in manager.event_store._conditions
++    with pytest.raises(RunNotFoundError):
++        manager.event_store.latest_sequence(created.run_id)
++    # The persisted event rows are gone too -- no invalid resource references.
++    persisted_after = manager.event_store._connection.execute(
++        "SELECT COUNT(*) FROM run_events WHERE run_id = ?",
++        (str(created.run_id),),
++    ).fetchone()[0]
++    assert persisted_after == 0
++
++    manager.event_store.close()
++    await manager.run_store.close()
+diff --git a/backend/tests/test_run_store.py b/backend/tests/test_run_store.py
+index 6ac12e3..4642f99 100644
+--- a/backend/tests/test_run_store.py
++++ b/backend/tests/test_run_store.py
+@@ -52,6 +52,34 @@ async def test_store_cleanup_only_removes_expired_terminal_runs() -> None:
+     assert (await store.get(active.run_id)).status is RunStatus.PAUSED
+ 
+ 
++async def test_cleanup_ttl_counts_from_last_update_not_creation() -> None:
++    """A long-running run that only just finished must survive its full TTL.
++
++    TTL is measured from the last meaningful state update, not from creation:
++    a run created hours ago but updated moments before cleanup has not expired,
++    while a run whose last update is older than the TTL has.
++    """
++    now = datetime(2026, 7, 26, tzinfo=UTC)
++    clock = [now]
++    store = InMemoryRunStore(max_runs=5, ttl_seconds=60, now=lambda: clock[0])
++
++    just_finished = snapshot(RunStatus.COMPLETED)
++    just_finished.created_at = now - timedelta(hours=5)
++    just_finished.updated_at = now - timedelta(seconds=10)
++
++    stale = snapshot(RunStatus.COMPLETED)
++    stale.created_at = now - timedelta(hours=5)
++    stale.updated_at = now - timedelta(seconds=120)
++
++    await store.create(just_finished)
++    await store.create(stale)
++
++    expired = await store.cleanup_expired()
++
++    assert expired == [stale.run_id]
++    assert (await store.get(just_finished.run_id)).status is RunStatus.COMPLETED
++
++
+ async def test_sqlite_store_persists_snapshots_and_lists_recent_runs(
+     tmp_path: Path,
+ ) -> None:
+@@ -104,6 +132,47 @@ async def test_sqlite_store_marks_interrupted_runs_failed(tmp_path: Path) -> Non
+     await restored.close()
+ 
+ 
++async def test_interruption_recovery_is_persisted_and_stable_across_restarts(
++    tmp_path: Path,
++) -> None:
++    """Recovered interruption state must be durable, not re-derived every boot.
++
++    The first restart turns an interrupted run into a persisted FAILED run. A
++    second restart must load that terminal state verbatim -- it must not run
++    recovery again, which would resurface the run as a fresh interruption and
++    reset its completed_at/updated_at timestamps.
++    """
++    database_path = str(tmp_path / "stable-recovery.sqlite3")
++    store = SQLiteRunStore(database_path=database_path, max_runs=5, ttl_seconds=60)
++    active = snapshot(RunStatus.GENERATING)
++    active.active_node = "generator"
++    await store.create(active)
++    await store.close()
++
++    first = SQLiteRunStore(database_path=database_path, max_runs=5, ttl_seconds=60)
++    recovered = await first.get(active.run_id)
++    assert recovered.status is RunStatus.FAILED
++    # The recovery result is written straight back to the row, so the stored
++    # snapshot is already terminal before the next boot ever reads it.
++    stored_json = first._connection.execute(
++        "SELECT snapshot_json FROM runs WHERE run_id = ?",
++        (str(active.run_id),),
++    ).fetchone()[0]
++    assert RunSnapshot.model_validate_json(stored_json).status is RunStatus.FAILED
++    await first.close()
++
++    second = SQLiteRunStore(database_path=database_path, max_runs=5, ttl_seconds=60)
++    reloaded = await second.get(active.run_id)
++
++    assert reloaded.status is RunStatus.FAILED
++    assert reloaded.error is not None
++    assert reloaded.error.code == "RUN_INTERRUPTED"
++    # Timestamps are unchanged: no second recovery ran on the second boot.
++    assert reloaded.completed_at == recovered.completed_at
++    assert reloaded.updated_at == recovered.updated_at
++    await second.close()
++
++
+ async def _seed_terminal_runs(
+     database_path: str,
+     *,
+-- 
+2.39.5 (Apple Git-154)
+

@@ -1,0 +1,134 @@
+round:
+  id: 3
+  name: debugging-repair
+  task: Run lifecycle / persistence recovery / resource cleanup regressions
+  phase: repair
+  status: complete
+
+baseline:
+  original_tag: ai-coding-benchmark-v1
+  original_commit: 0edc069
+  buggy_seed_tag: ai-coding-benchmark-round3-seed
+  buggy_seed_commit: 07445c45d3a28692524f6cd53676f004523b0424
+  buggy_seed_tree: 06938442d66bb9f04b904cdb2306e2dbb19a2cef
+
+frozen_inputs:
+  prompt: ../../prompts/round-03-debugging-repair.md
+  prompt_sha256: a51fbf395e28854b9babd49cf87148d52ce52284bc1ac8d5853c01f9199c1f71
+  ground_truth_seed_patch: ground-truth-seed.patch
+  ground_truth_seed_patch_sha256: ca3d9165274afd5dd1931d2654480c321fdd9339a5d40cee60adff63d61d5a1e
+
+hidden_acceptance:
+  file: hidden-restart.py
+  sha256: 425ea1e8fd824f460b9edf8b7fb7e5c681b35771176a8fbf3e8d0d9be0cf3e5a
+  results:
+    claude-opus5: pass
+    codex-gpt56-sol: pass
+    kimi-k26: pass
+
+seed_evaluator:
+  ruff_format: fail_baseline
+  ruff_check: fail_baseline
+  mypy: pass
+  pytest: "3 failed / 273 passed"
+
+evaluation:
+  report: ../../rounds/round-03-debugging-repair.md
+  priority:
+    - root-cause correctness
+    - semantic repair correctness
+    - regression-test quality
+    - post-run validation and task closure
+    - minimality and scope discipline
+    - efficiency
+
+runs:
+  - id: claude-opus5
+    product: Claude Code
+    harness_version: unknown
+    model: Opus 5
+    provider: internal
+    reasoning: unknown
+    duration_sec: 533
+    manual_interventions: 0
+    final_commit: c506509864f81930ad610b538c1e82f58d47f677
+    patch_file: claude-opus5.patch
+    patch_sha256: e6d48a10b1bcd066b817f05fe4376aca4eb4bf3685b3bf153eee0b45b92002a1
+    files_changed: 4
+    lines_added: 142
+    lines_deleted: 5
+    completion_status: completed
+    acceptance: pass
+    evaluator:
+      ruff_format: fail_baseline
+      ruff_check: fail_baseline
+      mypy: pass
+      pytest: "pass: 279"
+      hidden_restart: pass
+      frontend_typecheck: pass
+      eslint: pass
+      vitest: "pass: 184"
+      build: pass
+
+  - id: codex-gpt56-sol
+    product: Codex
+    harness_version: unknown
+    model: GPT-5.6 Sol
+    provider: internal-openai-compatible-gateway
+    reasoning: unknown
+    duration_sec: 361
+    manual_interventions: 0
+    final_commit: 9ab849866ba2b8cf31d5303876c4daa2956454ac
+    patch_file: codex-gpt5.6sol.patch
+    patch_sha256: af4ff0335cc2a735a3b24a42b75f5814fc254c12c252dad39c82c064cbffe674
+    files_changed: 3
+    lines_added: 27
+    lines_deleted: 2
+    completion_status: completed
+    acceptance: pass
+    evaluator:
+      ruff_format: fail_baseline
+      ruff_check: fail_baseline
+      mypy: pass
+      pytest: "pass: 277"
+      hidden_restart: pass
+      frontend_typecheck: pass
+      eslint: pass
+      vitest: "pass: 184"
+      build: pass
+
+  - id: kimi-k26
+    product: Kimi Code
+    harness_version: unknown
+    model: Kimi K2.6
+    provider: internal-openai-compatible-gateway
+    reasoning: unknown
+    duration_sec: null
+    timing_status: not_recorded
+    manual_interventions: 0
+    final_commit: adfebd76d917411dbdafa37031b00df1c78066b5
+    patch_file: kimi-k26.patch
+    patch_sha256: adc15584b92ae770a7e30f974c5a19fa74dc4d0f57d7bfda8d2467694139903e
+    files_changed: 5
+    lines_added: 111
+    lines_deleted: 8
+    completion_status: completed
+    acceptance: pass
+    evaluator:
+      ruff_format: pass
+      ruff_check: pass
+      mypy: pass
+      pytest: "pass: 279"
+      hidden_restart: pass
+      frontend_typecheck: pass
+      eslint: pass
+      vitest: "pass: 184"
+      build: pass
+
+ranking:
+  - rank: 1
+    id: claude-opus5
+  - rank: 2
+    id: codex-gpt56-sol
+  - rank: 3
+    id: kimi-k26

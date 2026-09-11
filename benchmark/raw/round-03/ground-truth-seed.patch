@@ -1,0 +1,34 @@
+diff --git a/backend/run_manager.py b/backend/run_manager.py
+index ef243e0..dc0871c 100644
+--- a/backend/run_manager.py
++++ b/backend/run_manager.py
+@@ -111,7 +111,6 @@ class RunManager:
+         return expired
+ 
+     def _release_run_resources(self, run_id: UUID) -> None:
+-        self.event_store.remove_run(run_id)
+         self.cancel_signals.pop(run_id, None)
+         self.resume_signals.pop(run_id, None)
+         self._active_started.pop(run_id, None)
+diff --git a/backend/run_store.py b/backend/run_store.py
+index 8972296..361280d 100644
+--- a/backend/run_store.py
++++ b/backend/run_store.py
+@@ -107,7 +107,7 @@ class InMemoryRunStore:
+             for run_id, run in self._runs.items():
+                 if (
+                     run.status in TERMINAL_RUN_STATUSES
+-                    and now - run.updated_at >= self.ttl
++                    and now - run.created_at >= self.ttl
+                 ):
+                     expired.append(run_id)
+             for run_id in expired:
+@@ -222,7 +222,7 @@ class SQLiteRunStore(InMemoryRunStore):
+             self._runs[snapshot.run_id] = snapshot
+             self._locks[snapshot.run_id] = asyncio.Lock()
+         for snapshot in interrupted:
+-            self._persist(snapshot)
++            self._runs[snapshot.run_id] = snapshot
+         self._enforce_retention_on_load()
+ 
+     def _enforce_retention_on_load(self) -> None:
