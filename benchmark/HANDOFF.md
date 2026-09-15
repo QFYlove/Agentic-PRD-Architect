@@ -1,6 +1,6 @@
 # AI Coding Benchmark — Working Handoff
 
-Last updated: 2026-09-11
+Last updated: 2026-09-15
 
 ## Project
 
@@ -111,45 +111,61 @@ Report: `benchmark/rounds/round-02-implementation.md`.
 
 ## Round 2 extension — ZCode + GLM-5.3
 
-Status: **incomplete / blocked; continuation pending if desired**.
+Status: **complete / archived; Canonical PASS**.
 
 Configuration:
 
 - ZCode Desktop App 3.11.2
 - Model: GLM-5.3
 - Thinking: `最高`
-- Round 2 permission mode: `完全访问`
-- Same frozen baseline and Round 2 prompt
-- Do not switch to GLM-5.3-Flash mid-run
+- Permission mode: `完全访问`
+- Baseline: `0edc069`
+- Same frozen canonical spec and exact Round 2 prompt
+- Semantic manual interventions: 0
 
-Observed execution:
+Timing / quota history:
 
-- first active segment: 850 sec, then quota exhausted;
-- second active segment: 213 sec, then quota exhausted again;
-- cumulative active execution observed so far: 1063 sec;
-- original first blocker T1 remains 850 sec;
-- waiting time for quota reset is excluded.
+- segment 1 active runtime: 850 sec → quota exhausted;
+- segment 2 active runtime: 213 sec → quota exhausted again;
+- segment 3 active runtime: not recorded → completed;
+- known active runtime: at least 1063 sec;
+- exact final active runtime: unavailable;
+- quota waiting time is excluded and no missing duration is estimated.
 
-Current modified files in the unfinished ZCode worktree:
+Final implementation:
 
-- `backend/config.py`
-- `backend/errors.py`
-- `backend/run_manager.py`
-- `backend/schemas.py`
-- `backend/telemetry.py`
-- `backend/workflow.py`
-- `backend/provider_catalog.py` (new)
+- final commit: `986929712107395062d71efc11270b50c607ae2d`
+- commit message: `benchmark: freeze zcode round 2 extension`
+- code delta: 35 files, +2581 / -109
+- final patch: `benchmark/raw/round-02/zcode-glm53.patch`
+- final patch SHA-256: `3a71df6936b2bdf8874e7da548a4dfd3fd688017f93801ed12e7636bdddddb3a`
 
-Checkpoint evidence:
+Operator verification:
 
-- `~/Desktop/zcode-glm53-r2-blocked-at-850s.patch`
-- `~/Desktop/zcode-glm53-r2-blocked-2-active-1063s-full.patch`
+- Ruff format/check: PASS
+- mypy: PASS
+- backend pytest: **305 passed**
+- frontend typecheck / ESLint / build: PASS
+- Vitest: **204 passed**
+- uniform `npx playwright test --project=chromium`: shared baseline `infra_error` from `.venvScriptspython.exe`
+- project `npm run test:e2e`: **23 passed**
 
-The second checkpoint includes the untracked `backend/provider_catalog.py`.
+Canonical review: **PASS**.
 
-Do not delete or reset the ZCode worktree until this extension is either completed and archived or explicitly abandoned.
+The implementation satisfies the frozen semantics for safe backend catalog exposure, explicit selection/no fallback, Run-scoped binding, different-pair isolation, JSON snapshot persistence without DDL, old-run compatibility, unavailable historical selection failure, selected-model pricing, missing-price `null`, deterministic mocks, frontend catalog states, and contract/lifecycle preservation.
 
-This extension does not modify the frozen original Round 2 ranking.
+Archive:
+
+- Git bundle: `~/Documents/ai-coding-benchmark-archives/round2-zcode/zcode-glm53-r2.bundle`
+- bundle SHA-256: `f86bb69f5d4e7273e63a5b4417eb44a6b92d98ecedd3996746645fb724c6c942`
+- bundle verification: complete history / okay
+- report: `benchmark/rounds/round-02-zcode-extension.md`
+- raw evidence record: `benchmark/raw/round-02/zcode-glm53.md`
+- evaluator: `benchmark/raw/round-02/zcode-glm53-evaluator.md`
+
+This is a post-freeze extension and does **not** modify the official frozen Round 2 ranking. Its final implementation quality is top-tier, but that comparison is reference-only because ZCode received a different continuation opportunity after quota recovery.
+
+The ZCode benchmark run is closed. After this archive update is committed and pushed in the main repository, the ZCode worktree may be removed.
 
 ## Round 3 — Complete / Frozen
 
@@ -239,16 +255,11 @@ The repeated-restart probe was authored after the runs and is recorded as an ind
 
 Report: `benchmark/rounds/round-03-debugging-repair.md`.
 
-## Round 3 Temporary Repositories
+## Archive State
 
-Independent Round 3 repositories:
+Round 3 evidence has already been frozen, tagged, pushed, bundled, verified, and its temporary Round 3 repositories removed.
 
-- `~/Documents/Agentic-PRD-Architect-r3-claude`
-- `~/Documents/Agentic-PRD-Architect-r3-codex`
-- `~/Documents/Agentic-PRD-Architect-r3-kimi-k26`
-- `~/Documents/Agentic-PRD-Architect-r3-seed`
-
-Do not delete these until the Round 3 evidence has been committed/tagged in the main repository and any desired final Git bundles have been created.
+ZCode Round 2 now also has a frozen implementation commit, full patch hash, operator evaluator evidence, and verified Git bundle. Once this documentation/evidence update is committed and pushed, its worktree can be removed.
 
 ## Operational Notes
 
@@ -256,48 +267,16 @@ Do not delete these until the Round 3 evidence has been committed/tagged in the 
 - Do not estimate missing duration/token/cost values.
 - Do not selectively rerun frozen systems to improve rankings.
 - Do not merge the Round 3 buggy seed into production.
-- Kimi's unrelated `test_node_timings.py` Ruff cleanup is preserved as delivered evidence and treated as minor scope creep.
-- The first Kimi frontend evaluator attempt was contaminated by a temporary `node_modules.round3-backup` directory inside the repository. That attempt is discarded; the clean rerun passed.
+- ZCode's exact final active runtime is unavailable; preserve `>=1063s known active runtime` rather than fabricating a total.
+- ZCode is a post-freeze extension and must not retroactively modify the original Round 2 ranking.
 
 ## Current Next Actions
 
-### 1. Freeze Round 3 evidence in the main repository
+1. Apply this final ZCode archive batch to the main repository.
+2. Review `git diff`, then commit and push the benchmark archive update.
+3. Remove the ZCode worktree after confirming the main-repository archive and external Git bundle.
+4. Start production integration from a clean branch/worktree based on formal `main`.
+5. Compare Round 2 candidate implementations module-by-module and selectively port/reimplement the strongest semantics and tests.
+6. Run a fresh non-benchmark product acceptance pass before merging production integration.
 
-After the updated benchmark documents and `metrics.csv` are in place:
-
-```bash
-git add benchmark
-git diff --cached --stat
-git status --short
-```
-
-Then commit and tag:
-
-```bash
-git commit -m "benchmark: freeze round 3 results and evidence"
-git tag -a ai-coding-benchmark-round3 -m "Freeze Round 3 debugging and repair benchmark"
-```
-
-Push the commit and tag after verification.
-
-### 2. Finish or explicitly abandon the ZCode Round 2 extension
-
-If continuing, use the same ZCode task, worktree, GLM-5.3 model, and configuration. Do not mix models inside the existing run.
-
-Once complete, archive it strictly as a post-freeze Round 2 extension.
-
-### 3. Archive and remove temporary Round 3 repositories
-
-After freeze/tag and optional Git-bundle creation, the temporary Round 3 repositories can be deleted.
-
-### 4. Move to production integration
-
-The competitive benchmark is finished after Round 3.
-
-Do not merge a benchmark “winner” wholesale. Instead:
-
-1. compare candidate diffs by module;
-2. select the strongest semantics and regression tests;
-3. port/cherry-pick/reimplement selectively;
-4. run a fresh non-benchmark product acceptance pass;
-5. merge only the production-ready result into the formal project branch.
+The competitive benchmark is finished. **Do not start Round 4.**

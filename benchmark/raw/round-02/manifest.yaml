@@ -239,3 +239,33 @@ runs:
       build: pass
       playwright: infra_error
     notes: "Run terminated on provider 429 / insufficient balance before a normal final response. Frontend subagent alone exposed 49m35s, 132k tokens, and 122 tool calls. Operator Playwright was blocked by the shared evaluator path issue; canonical review still found the strongest final implementation."
+
+post_freeze_extensions:
+  - id: zcode-glm53
+    product: ZCode Desktop App
+    harness_version: 3.11.2
+    model: GLM-5.3
+    provider: unknown
+    reasoning: highest
+    branch: bench/provider-zcode
+    baseline_commit: 0edc069
+    raw_file: zcode-glm53.md
+    evaluator_file: zcode-glm53-evaluator.md
+    patch_file: zcode-glm53.patch
+    final_commit: 986929712107395062d71efc11270b50c607ae2d
+    final_patch_sha256: 3a71df6936b2bdf8874e7da548a4dfd3fd688017f93801ed12e7636bdddddb3a
+    bundle_sha256: f86bb69f5d4e7273e63a5b4417eb44a6b92d98ecedd3996746645fb724c6c942
+    segment_1_active_sec: 850
+    segment_2_active_sec: 213
+    segment_3_active_sec: null
+    known_active_runtime_sec_min: 1063
+    exact_total_active_runtime_sec: null
+    manual_interventions: 0
+    files_changed: 35
+    lines_added: 2581
+    lines_deleted: 109
+    final_test_result: pass
+    completion_status: completed
+    canonical_acceptance: PASS
+    ranking_effect: none
+    notes: "Post-freeze extension; exact total active runtime unavailable. Uniform Playwright operator command hit the shared baseline .venvScriptspython.exe infra error; project npm run test:e2e passed 23 tests. Does not alter frozen Round 2 ranking."

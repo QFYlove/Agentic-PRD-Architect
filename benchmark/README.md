@@ -20,7 +20,7 @@ ZCode is tracked as an extension and does not retroactively change the frozen or
 
 ## Benchmark Baseline
 
-Git tag: `ai-coding-benchmark-v1`
+Git tag: `ai-coding-benchmark-v1`  
 Commit: `0edc069`
 
 ## Structure
@@ -91,11 +91,25 @@ Round 2 showed that green tests are not sufficient evidence of requirement corre
 
 #### Round 2 post-freeze extension — ZCode + GLM-5.3
 
-Status: **incomplete / blocked**
+Status: **complete — Canonical PASS**
 
-ZCode is being evaluated separately as a late extension against the same frozen Round 2 task. The run has already hit GLM-5.3 quota limits more than once and is not part of the frozen original Round 2 ranking.
+ZCode Desktop App 3.11.2 + GLM-5.3 (`最高`) completed the same frozen Round 2 task after multiple quota-limited continuations. The final implementation was independently evaluated as **PASS** against the frozen canonical requirements.
 
-Do not mix GLM-5.3-Flash or another model into the same extension run.
+Key evidence:
+
+- final commit: `986929712107395062d71efc11270b50c607ae2d`
+- final delta: **35 files, +2581 / -109**
+- final full patch SHA-256: `3a71df6936b2bdf8874e7da548a4dfd3fd688017f93801ed12e7636bdddddb3a`
+- operator backend: Ruff format/check PASS, mypy PASS, **305 pytest passed**
+- operator frontend: typecheck/lint/build PASS, **204 Vitest passed**
+- project deterministic E2E: **23 passed**
+- uniform Playwright command: shared baseline `infra_error` (`.venvScriptspython.exe`)
+- active runtime: 850s + 213s + final segment not recorded; exact total unavailable
+- semantic manual interventions: 0
+
+This remains a **post-freeze extension** and does not alter the official frozen Round 2 ranking. Because ZCode was allowed to resume after quota recovery under a continuation policy not uniformly applied to the original frozen systems, any cross-system placement is reference-only.
+
+See `rounds/round-02-zcode-extension.md` and `raw/round-02/zcode-glm53-evaluator.md`.
 
 ### Round 3 — Debugging & Repair
 

@@ -76,8 +76,8 @@ Therefore:
 
 For example:
 
-Kimi Code + Kimi K2.6
-vs.
+Kimi Code + Kimi K2.6  
+vs.  
 Kimi Code + Kimi K3
 
 holds the coding harness, repository baseline, and task prompt constant for Round 1 and Round 2 while changing the underlying model.
@@ -185,6 +185,12 @@ Once a round is frozen:
 - do not feed operator-discovered failures back to only one agent;
 - do not rewrite the canonical specification or evaluation criteria after seeing results;
 - extension runs must be labeled separately and must not retroactively alter the original frozen ranking.
+
+### Post-freeze continuation comparability
+
+A post-freeze extension may preserve an interrupted run and continue it after a product quota/provider limit clears, provided the continuation is documented and no new semantic guidance is supplied. Active execution segments must be reported separately when exact end-to-end duration is unavailable; waiting time and missing segment duration must not be guessed.
+
+If that continuation opportunity was not applied uniformly to the original frozen systems, the extension may be evaluated for final implementation quality but **must not be inserted into the frozen ranking as though it were a controlled additional participant**. Product reliability evidence such as repeated quota exhaustion remains part of the end-to-end observation.
 
 ## Production Integration Rule
 

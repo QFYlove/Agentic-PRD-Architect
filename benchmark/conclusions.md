@@ -16,7 +16,7 @@ Detailed round-specific findings remain in:
 - `rounds/round-02-implementation.md`
 - `rounds/round-03-debugging-repair.md`
 
-ZCode + GLM-5.3 is tracked separately as a post-freeze extension. Its Round 1 extension is complete; its Round 2 extension remains incomplete and does not change the frozen original rankings.
+ZCode + GLM-5.3 is tracked separately as a post-freeze extension. Its Round 1 and Round 2 extensions are complete. The Round 2 extension achieved a fully verified canonical PASS, but it does not change the frozen original rankings because it was run later and received a different quota-continuation opportunity.
 
 ## 1. Planning quality, implementation outcome, and repair quality are different signals
 
@@ -126,7 +126,15 @@ Therefore the durable interpretation remains:
 - do not automatically attribute a cross-product difference to either the model or the coding harness alone;
 - preserve quota, balance, environment, and permission failures as product-level evidence when they affect completion.
 
-## 8. The core benchmark is now sufficient for the current objective
+## 8. ZCode Round 2 extension separates final code quality from product reliability
+
+The late ZCode + GLM-5.3 Round 2 extension achieved **Canonical PASS** after operator verification, including real Run-scoped Provider/Model binding, different-pair isolation, per-model pricing, persistence/rehydration semantics, frontend catalog states, 305 backend pytest tests, 204 Vitest tests, and 23 deterministic project E2E tests.
+
+The run nevertheless exhausted quota after 850 active seconds, resumed for another 213 active seconds, exhausted quota again, and completed only after a later continuation whose active duration was not recorded. The exact total active runtime is unavailable and is not estimated.
+
+This reinforces a core benchmark finding: **final code quality and end-to-end product reliability are separate signals**. The extension is not inserted into the frozen Round 2 ranking because ZCode received a continuation opportunity after quota restoration that was not uniformly applied to the original frozen systems.
+
+## 9. The core benchmark is now sufficient for the current objective
 
 The three rounds cover three materially different coding-agent competencies:
 
