@@ -26,11 +26,40 @@ function expectBasicAccessibility(container: HTMLElement) {
 }
 
 describe("ProductIdeaForm", () => {
+  const formCatalogProps = { providers: [{ provider_id: "p1", provider_display_name: "Alpha", models: [{ model_id: "m1", model_display_name: "Model" }] }], catalogState: "loaded" as const, catalogError: null, onRetryCatalog: vi.fn() };
+  it("requires and submits a valid provider/model pair", async () => {
+    const submit = vi.fn().mockResolvedValue(undefined);
+    render(<ProductIdeaForm isSubmitting={false} onSubmit={submit} catalogState="loaded" providers={[{ provider_id: "p1", provider_display_name: "Alpha", models: [{ model_id: "m1", model_display_name: "Model" }] }]} catalogError={null} onRetryCatalog={vi.fn()} />);
+    const button = screen.getByRole("button", { name: /开始生成 PRD/i });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    await userEvent.selectOptions(screen.getByLabelText("Provider"), "p1");
+    await userEvent.selectOptions(screen.getByLabelText("Model"), "m1");
+    expect((button as HTMLButtonElement).disabled).toBe(false);
+    await userEvent.type(screen.getByLabelText(/产品想法/), "A sufficiently detailed product idea");
+    await userEvent.click(button);
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ provider_id: "p1", model_id: "m1" }));
+  });
+
+  it("clears the Model when Provider changes and requires a new valid pair", async () => {
+    const submit = vi.fn().mockResolvedValue(undefined);
+    render(<ProductIdeaForm isSubmitting={false} onSubmit={submit} catalogState="loaded" catalogError={null} onRetryCatalog={vi.fn()} providers={[{ provider_id: "a", provider_display_name: "Provider A", models: [{ model_id: "ma", model_display_name: "Model A" }] }, { provider_id: "b", provider_display_name: "Provider B", models: [{ model_id: "mb", model_display_name: "Model B" }]}]} />);
+    const button = screen.getByRole("button", { name: /开始生成 PRD/i }) as HTMLButtonElement;
+    await userEvent.type(screen.getByLabelText(/产品想法/), "A sufficiently detailed product idea");
+    const provider = screen.getByLabelText("Provider"); const model = screen.getByLabelText("Model");
+    await userEvent.selectOptions(provider, "a"); await userEvent.selectOptions(model, "ma");
+    expect((model as HTMLSelectElement).value).toBe("ma"); expect(button.disabled).toBe(false);
+    await userEvent.selectOptions(provider, "b");
+    expect((model as HTMLSelectElement).value).toBe(""); expect(screen.queryByRole("option", { name: "Model B", selected: true })).toBeNull(); expect(button.disabled).toBe(true);
+    await userEvent.selectOptions(model, "mb"); expect(button.disabled).toBe(false);
+  });
+
   it("blocks invalid input and shows the boundary message", async () => {
     const submit = vi.fn().mockResolvedValue(undefined);
     const { container } = render(
-      <ProductIdeaForm isSubmitting={false} onSubmit={submit} />,
+      <ProductIdeaForm isSubmitting={false} onSubmit={submit} {...formCatalogProps} />,
     );
+    await userEvent.selectOptions(screen.getByLabelText("Provider"), "p1");
+    await userEvent.selectOptions(screen.getByLabelText("Model"), "m1");
     await userEvent.click(
       screen.getByRole("button", { name: /开始生成 PRD/i }),
     );
@@ -47,7 +76,9 @@ describe("ProductIdeaForm", () => {
           release = resolve;
         }),
     );
-    render(<ProductIdeaForm isSubmitting={false} onSubmit={submit} />);
+    render(<ProductIdeaForm isSubmitting={false} onSubmit={submit} {...formCatalogProps} />);
+    await userEvent.selectOptions(screen.getByLabelText("Provider"), "p1");
+    await userEvent.selectOptions(screen.getByLabelText("Model"), "m1");
     await userEvent.type(
       screen.getByLabelText(/产品想法/),
       "A detailed podcast subscription experience",
@@ -64,6 +95,18 @@ describe("ProductIdeaForm", () => {
       }),
     );
     release?.();
+  });
+});
+
+describe("Telemetry provider metadata", () => {
+  it("renders persisted Provider and Model display names", () => {
+    render(<TelemetryPanel snapshot={{ ...makeSnapshot(), provider_display_name: "Persisted Provider", model_display_name: "Persisted Model" }} />);
+    expect(screen.getByText("Persisted Provider / Persisted Model")).toBeTruthy();
+  });
+
+  it("renders the explicit legacy state for null metadata", () => {
+    render(<TelemetryPanel snapshot={{ ...makeSnapshot(), provider_display_name: null, model_display_name: null }} />);
+    expect(screen.getByText("未记录（历史任务） / 未记录（历史任务）")).toBeTruthy();
   });
 });
 

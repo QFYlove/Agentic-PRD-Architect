@@ -73,6 +73,7 @@ class MockEventSource implements EventSourceLike {
 }
 
 class FakeApi implements AgentApi {
+  getProviders = vi.fn<() => Promise<{ providers: [] }>>();
   listRuns = vi.fn<() => Promise<RunListResponse>>();
   getRun = vi.fn<(runId: string) => Promise<RunSnapshot>>();
   createRun =

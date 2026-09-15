@@ -64,6 +64,7 @@ export function TelemetryPanel({ snapshot }: { snapshot: RunSnapshot }) {
         )}
       </div>
       <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3">
+        <div className="min-w-0 border-l border-line pl-3"><dt className="text-[11px] text-ink-faint">Provider / Model</dt><dd className="mt-0.5 text-sm font-medium text-ink">{snapshot.provider_display_name ?? "未记录（历史任务）"} / {snapshot.model_display_name ?? "未记录（历史任务）"}</dd></div>
         {metrics.map(({ label, value, icon: Icon }) => (
           <div key={label} className="min-w-0 border-l border-line pl-3">
             <dt className="flex items-center gap-1.5 text-[11px] text-ink-faint">

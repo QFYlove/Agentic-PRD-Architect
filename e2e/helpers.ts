@@ -72,6 +72,12 @@ export async function startRun(
       .getByLabel("最大迭代次数")
       .selectOption(String(options.maxIterations));
   }
+  const provider = page.getByLabel("Provider");
+  await expect(provider).toBeEnabled();
+  await provider.selectOption({ index: 1 });
+  const model = page.getByLabel("Model");
+  await expect(model).toBeEnabled();
+  await model.selectOption({ index: 1 });
   await page.getByRole("button", { name: "开始生成 PRD" }).click();
   await expect
     .poll(() => new URL(page.url()).searchParams.get("run_id"))

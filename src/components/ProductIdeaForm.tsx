@@ -3,10 +3,13 @@ import { useState } from "react";
 import type { FormEvent } from "react";
 
 import type { CreateRunRequest } from "../lib/types";
+import type { Provider } from "../lib/types";
+import { ProviderModelSelector } from "./ProviderModelSelector";
 
 interface ProductIdeaFormProps {
   isSubmitting: boolean;
   onSubmit(request: CreateRunRequest): Promise<void>;
+  providers: Provider[]; catalogState: "loading" | "loaded" | "empty" | "error"; catalogError: string | null; onRetryCatalog: () => void;
 }
 
 interface FormErrors {
@@ -18,6 +21,7 @@ interface FormErrors {
 export function ProductIdeaForm({
   isSubmitting,
   onSubmit,
+  providers, catalogState, catalogError, onRetryCatalog,
 }: ProductIdeaFormProps) {
   const [idea, setIdea] = useState("");
   const [audience, setAudience] = useState("");
@@ -26,6 +30,9 @@ export function ProductIdeaForm({
   const [maxIterations, setMaxIterations] = useState(3);
   const [errors, setErrors] = useState<FormErrors>({});
   const [submittingLocally, setSubmittingLocally] = useState(false);
+  const [providerId, setProviderId] = useState(""); const [modelId, setModelId] = useState("");
+  const selectedProvider = providers.find((p) => p.provider_id === providerId);
+  const pairValid = catalogState === "loaded" && Boolean(selectedProvider?.models.some((m) => m.model_id === modelId));
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,6 +65,8 @@ export function ProductIdeaForm({
         user_constraints: constraints.trim() || null,
         quality_threshold: qualityThreshold,
         max_iterations: maxIterations,
+        provider_id: providerId,
+        model_id: modelId,
       });
     } finally {
       setSubmittingLocally(false);
@@ -164,10 +173,15 @@ export function ProductIdeaForm({
         </div>
       </details>
 
+      {catalogState === "loading" && <p className="mt-4 text-sm text-ink-muted">正在加载可用 Provider 和 Model…</p>}
+      {catalogState === "empty" && <p className="mt-4 text-sm text-ink-muted">当前没有可用的 Provider 或 Model。</p>}
+      {catalogState === "error" && <div className="mt-4 text-sm text-danger" role="alert">{catalogError} <button type="button" className="underline" onClick={onRetryCatalog}>重试</button></div>}
+      {catalogState === "loaded" && <ProviderModelSelector providers={providers} providerId={providerId} modelId={modelId} disabled={busy} onProviderChange={(id) => { setProviderId(id); if (!providers.find((p) => p.provider_id === id)?.models.some((m) => m.model_id === modelId)) setModelId(""); }} onModelChange={setModelId} />}
+
       <button
         className="button-primary mt-5 w-full sm:w-auto"
         type="submit"
-        disabled={busy}
+        disabled={busy || !pairValid}
       >
         {busy ? "正在创建任务…" : "开始生成 PRD"}
         {!busy && <ArrowRight aria-hidden="true" size={16} />}

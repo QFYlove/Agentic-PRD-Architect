@@ -13,6 +13,7 @@ import type {
   RunListResponse,
   RunSnapshot,
   RunStatus,
+  ProviderCatalog,
 } from "./types";
 
 export interface HealthResponse {
@@ -34,6 +35,7 @@ export class ApiClientError extends Error {
 }
 
 export interface AgentApi {
+  getProviders(): Promise<ProviderCatalog>;
   createRun(request: CreateRunRequest): Promise<CreateRunResponse>;
   listRuns(limit?: number): Promise<RunListResponse>;
   getRun(runId: string): Promise<RunSnapshot>;
@@ -90,6 +92,9 @@ function parseHealthResponse(value: unknown): HealthResponse {
 }
 
 export class HttpAgentApi implements AgentApi {
+  getProviders(): Promise<ProviderCatalog> {
+    return this.request("/api/providers", undefined, (value) => value as ProviderCatalog);
+  }
   readonly baseUrl: string;
 
   constructor(

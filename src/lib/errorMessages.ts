@@ -3,6 +3,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   INVALID_RESPONSE: "服务返回了无法识别的数据，请稍后重试。",
   HTTP_ERROR: "请求失败，请稍后重试。",
   REQUEST_VALIDATION_FAILED: "提交的数据不符合要求，请检查后重试。",
+  INVALID_PROVIDER_SELECTION:
+    "所选 Provider 或 Model 已不可用，请重新选择后重试。",
   RUN_NOT_FOUND: "找不到该任务，它可能已经过期或被清理。",
   RUN_CAPACITY_REACHED: "当前运行中的任务已达上限，请稍后再试。",
   STORE_CAPACITY_REACHED: "任务存储空间已满，请稍后再试。",

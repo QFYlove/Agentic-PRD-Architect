@@ -69,7 +69,13 @@ export interface CreateRunRequest {
   user_constraints?: string | null;
   quality_threshold: number;
   max_iterations: number;
+  provider_id?: string;
+  model_id?: string;
 }
+
+export interface ProviderModel { model_id: string; model_display_name: string; capabilities?: string[] | null }
+export interface Provider { provider_id: string; provider_display_name: string; models: ProviderModel[] }
+export interface ProviderCatalog { providers: Provider[] }
 
 export interface ResumeRunRequest {
   user_override?: string | null;
@@ -199,6 +205,10 @@ export interface RunSnapshot {
   completed_at?: string | null;
   error?: RunError | null;
   latest_event_sequence: number;
+  provider_id?: string | null;
+  provider_display_name?: string | null;
+  model_id?: string | null;
+  model_display_name?: string | null;
 }
 
 export interface RunSummary {

@@ -2,6 +2,7 @@ import { AlertCircle, Boxes, RefreshCw } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 
 import { useAgentRun, type UseAgentRunOptions } from "../hooks/useAgentRun";
+import { useProviderCatalog } from "../hooks/useProviderCatalog";
 import { failureNotice } from "../lib/failureNotice";
 import { outcomeSummary } from "../lib/outcomeSummary";
 import type { ConnectionStatus, VersionScore } from "../lib/runReducer";
@@ -88,6 +89,7 @@ export function AgentDashboard({
   });
   const { state } = controller;
   const snapshot = state.snapshot;
+  const catalog = useProviderCatalog(api ?? undefined);
   const [requestedTab, setRequestedTab] = useState("prd");
 
   const versions = Object.keys(state.drafts)
@@ -319,6 +321,7 @@ export function AgentDashboard({
                 <ProductIdeaForm
                   isSubmitting={state.isCreating}
                   onSubmit={controller.createRun}
+                  providers={catalog.providers} catalogState={catalog.state} catalogError={catalog.error} onRetryCatalog={catalog.retry}
                 />
               </section>
             ) : !snapshot || !state.status ? (

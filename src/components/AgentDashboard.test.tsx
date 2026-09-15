@@ -2,7 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { AgentApi } from "../lib/api";
+import { ApiClientError, type AgentApi } from "../lib/api";
 import type { RunStatus } from "../lib/types";
 import {
   makeEvaluation,
@@ -43,6 +43,7 @@ function apiFor(status: RunStatus): AgentApi {
     resumeRun: vi.fn(),
     cancelRun: vi.fn(),
     health: vi.fn(),
+    getProviders: vi.fn().mockResolvedValue({ providers: [{ provider_id: "p1", provider_display_name: "Test Provider", models: [{ model_id: "m1", model_display_name: "Test Model" }] }] }),
     eventsUrl: (runId, afterSequence) =>
       `http://api.test/${runId}?after_sequence=${afterSequence}`,
   };
@@ -84,6 +85,8 @@ describe("AgentDashboard state framework", () => {
       screen.getByLabelText(/产品想法/),
       "A detailed product workflow for independent creators",
     );
+    await userEvent.selectOptions(screen.getByLabelText("Provider"), "p1");
+    await userEvent.selectOptions(screen.getByLabelText("Model"), "m1");
     await userEvent.click(
       screen.getByRole("button", { name: /开始生成 PRD/i }),
     );
@@ -94,6 +97,42 @@ describe("AgentDashboard state framework", () => {
         }) as HTMLButtonElement
       ).disabled,
     ).toBe(true);
+  });
+
+  it("keeps the selected pair and creation state when the backend rejects a stale selection", async () => {
+    const api = apiFor("QUEUED");
+    api.createRun = vi.fn().mockRejectedValue(new ApiClientError("Invalid provider selection", "INVALID_PROVIDER_SELECTION", 422));
+    render(<AgentDashboard api={api} eventSourceFactory={eventSourceFactory} />);
+    await userEvent.type(screen.getByLabelText(/产品想法/), "A detailed product workflow for independent creators");
+    await userEvent.selectOptions(screen.getByLabelText("Provider"), "p1");
+    await userEvent.selectOptions(screen.getByLabelText("Model"), "m1");
+    await userEvent.click(screen.getByRole("button", { name: /开始生成 PRD/i }));
+    await waitFor(() => expect(api.createRun).toHaveBeenCalledTimes(1));
+    expect(api.createRun).toHaveBeenCalledWith(expect.objectContaining({ provider_id: "p1", model_id: "m1" }));
+    expect(window.location.search).not.toContain("run_id=");
+    expect(screen.getByRole("heading", { name: /让每一份需求/ })).toBeTruthy();
+    expect(screen.queryByTestId("run-status")).toBeNull();
+    expect((screen.getByLabelText("Provider") as HTMLSelectElement).value).toBe("p1");
+    expect((screen.getByLabelText("Model") as HTMLSelectElement).value).toBe("m1");
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.textContent).toContain("所选 Provider 或 Model 已不可用");
+    expect(alerts[0]?.textContent).not.toContain("操作失败，请稍后重试");
+  });
+
+  it("shows one mapped generic error when run creation fails for another reason", async () => {
+    const api = apiFor("QUEUED");
+    api.createRun = vi.fn().mockRejectedValue(new ApiClientError("At capacity", "RUN_CAPACITY_REACHED", 429));
+    render(<AgentDashboard api={api} eventSourceFactory={eventSourceFactory} />);
+    await userEvent.type(screen.getByLabelText(/产品想法/), "A detailed product workflow for independent creators");
+    await userEvent.selectOptions(screen.getByLabelText("Provider"), "p1");
+    await userEvent.selectOptions(screen.getByLabelText("Model"), "m1");
+    await userEvent.click(screen.getByRole("button", { name: /开始生成 PRD/i }));
+    await waitFor(() => expect(api.createRun).toHaveBeenCalledTimes(1));
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.textContent).toContain("当前运行中的任务已达上限");
+    expect(alerts[0]?.textContent).not.toContain("所选 Provider 或 Model 已不可用");
   });
 
   it.each([
