@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 
+from backend.language import DEFAULT_OUTPUT_LANGUAGE
 from backend.prd_document import PRD_COMPLETION_MARKER
 from backend.prompts import (
     COMPOSITION_RULES,
@@ -28,11 +29,9 @@ from backend.schemas import (
 )
 from backend.tests.helpers import make_manager
 
-from backend.language import DEFAULT_OUTPUT_LANGUAGE
-
 
 async def test_every_node_call_records_its_own_duration() -> None:
-    """"Which node is slow" is only answerable if the calls stay separate."""
+    """ "Which node is slow" is only answerable if the calls stay separate."""
     manager = make_manager()
     created = await manager.create_run(
         CreateRunRequest(user_idea="Build a product whose timings are recorded.")
@@ -243,9 +242,7 @@ async def test_a_failed_v2_leaves_v1_its_reviews_and_its_plan_intact() -> None:
     assert result.current_iteration == 2
 
 
-@pytest.mark.parametrize(
-    "prompt", [GENERATOR_SYSTEM_PROMPT, OPTIMIZER_SYSTEM_PROMPT]
-)
+@pytest.mark.parametrize("prompt", [GENERATOR_SYSTEM_PROMPT, OPTIMIZER_SYSTEM_PROMPT])
 def test_no_prompt_leaks_provider_or_process_detail(prompt: str) -> None:
     assert "api_key" not in prompt.lower()
     assert "traceback" not in prompt.lower()
