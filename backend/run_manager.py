@@ -12,6 +12,14 @@ from backend.errors import RunCapacityError, RunConflictError
 from backend.event_store import TRANSIENT_EVENT_TYPES, EventStore
 from backend.language import detect_output_language
 from backend.observability import log_event
+from backend.provider_catalog import (
+    CatalogModel,
+    CatalogProvider,
+    ModelPricing,
+    ProviderCatalog,
+    RunBinding,
+    RunExecution,
+)
 from backend.providers.base import LLMProvider
 from backend.run_store import InMemoryRunStore
 from backend.schemas import (
@@ -48,9 +56,66 @@ class RunManager:
         provider: LLMProvider,
         run_store: InMemoryRunStore,
         event_store: EventStore,
+        catalog: ProviderCatalog | None = None,
     ) -> None:
         self.settings = settings
         self.provider = provider
+        self.catalog = catalog or ProviderCatalog(
+            (
+                CatalogProvider(
+                    "default",
+                    type(provider).__name__,
+                    (
+                        CatalogModel(
+                            "default",
+                            type(provider).__name__,
+                            "default",
+                            provider,
+                            ModelPricing(
+                                settings.model_input_price_per_million,
+                                settings.model_output_price_per_million,
+                            ),
+                            True,
+                        ),
+                    ),
+                ),
+            )
+        )
+        self._run_bindings: dict[UUID, RunBinding] = {}
+        self._rehydration_errors: set[UUID] = set()
+        for loaded_id, loaded in getattr(run_store, "_runs", {}).items():
+            if loaded.provider_id and loaded.model_id:
+                try:
+                    resolved = self.catalog.resolve(loaded.provider_id, loaded.model_id)
+                    self._run_bindings[loaded_id] = RunBinding(
+                        loaded.provider_id,
+                        loaded.provider_display_name
+                        or resolved.provider.provider_display_name,
+                        loaded.model_id,
+                        loaded.model_display_name or resolved.model.model_display_name,
+                        RunExecution(
+                            resolved.model.provider,
+                            resolved.model.pricing,
+                            resolved.model.provider.is_mock,
+                        ),
+                    )
+                except ValueError:
+                    self._rehydration_errors.add(loaded_id)
+            else:
+                self._run_bindings[loaded_id] = RunBinding(
+                    "legacy",
+                    "Legacy",
+                    "legacy",
+                    "Legacy",
+                    RunExecution(
+                        self.provider,
+                        ModelPricing(
+                            settings.model_input_price_per_million,
+                            settings.model_output_price_per_million,
+                        ),
+                        self.provider.is_mock,
+                    ),
+                )
         self.run_store = run_store
         self.event_store = event_store
         self.workflow: WorkflowRunner | None = None
@@ -120,11 +185,63 @@ class RunManager:
         for key in [key for key in self._node_started if key[0] == run_id]:
             self._node_started.pop(key, None)
         self.tasks.pop(run_id, None)
+        self._run_bindings.pop(run_id, None)
+        self._rehydration_errors.discard(run_id)
+
+    def provider_for(self, run_id: UUID) -> LLMProvider:
+        if run_id in self._rehydration_errors:
+            raise RunConflictError(
+                "PROVIDER_SELECTION_UNAVAILABLE",
+                "The historical provider/model is no longer available.",
+            )
+        binding = self._run_bindings.get(run_id)
+        if binding is None:
+            raise RunConflictError(
+                "PROVIDER_SELECTION_UNAVAILABLE", "Run binding is unavailable."
+            )
+        return binding.execution.provider
 
     async def create_run(self, request: CreateRunRequest) -> RunSnapshot:
         if not self._accepting:
             raise RunConflictError("APP_SHUTTING_DOWN", "The application is stopping.")
         async with self._create_lock:
+            binding: RunBinding
+            if request.provider_id is not None:
+                try:
+                    resolved = self.catalog.resolve(
+                        request.provider_id, request.model_id or ""
+                    )
+                except ValueError as exc:
+                    from backend.errors import AppError
+
+                    raise AppError(
+                        "INVALID_PROVIDER_SELECTION",
+                        "The selected provider and model are unavailable.",
+                        422,
+                    ) from exc
+                binding = RunBinding(
+                    resolved.provider.provider_id,
+                    resolved.provider.provider_display_name,
+                    resolved.model.model_id,
+                    resolved.model.model_display_name,
+                    RunExecution(
+                        resolved.model.provider,
+                        resolved.model.pricing,
+                        resolved.model.provider.is_mock,
+                    ),
+                )
+            else:
+                pricing = ModelPricing(
+                    self.settings.model_input_price_per_million,
+                    self.settings.model_output_price_per_million,
+                )
+                binding = RunBinding(
+                    "legacy",
+                    "Legacy",
+                    "legacy",
+                    "Legacy",
+                    RunExecution(self.provider, pricing, self.provider.is_mock),
+                )
             if await self.run_store.active_count() >= self.settings.max_concurrent_runs:
                 raise RunCapacityError
             for evicted in await self.run_store.make_room():
@@ -155,12 +272,25 @@ class RunManager:
                     "aggregator": NodeStatus.PENDING,
                     "optimizer": NodeStatus.PENDING,
                 },
-                is_mock=self.provider.is_mock,
-                cost_available=self.provider.is_mock or self.settings.has_model_pricing,
+                provider_id=binding.provider_id if request.provider_id else None,
+                provider_display_name=binding.provider_display_name
+                if request.provider_id
+                else None,
+                model_id=binding.model_id if request.provider_id else None,
+                model_display_name=binding.model_display_name
+                if request.provider_id
+                else None,
+                is_mock=binding.execution.is_mock,
+                cost_available=binding.execution.is_mock
+                or (
+                    binding.execution.pricing.input_per_million is not None
+                    and binding.execution.pricing.output_per_million is not None
+                ),
                 created_at=now,
                 updated_at=now,
             )
             await self.run_store.create(snapshot)
+            self._run_bindings[run_id] = binding
             self.event_store.create_run(run_id)
             self.cancel_signals[run_id] = asyncio.Event()
             self.resume_signals[run_id] = asyncio.Event()
@@ -523,16 +653,19 @@ class RunManager:
         event_payload: dict[str, Any] = {}
 
         def mutate(state: RunSnapshot) -> None:
+            binding = self._run_bindings.get(run_id)
             previous = state.node_tokens.get(node, TokenUsage())
             state.node_tokens[node] = add_usage(previous, usage)
             state.total_tokens = add_usage(state.total_tokens, usage)
             state.estimated_cost_usd = estimate_cost(
                 state.total_tokens,
                 self.settings,
-                is_mock=self.provider.is_mock,
+                is_mock=self.provider_for(run_id).is_mock,
+                pricing=binding.execution.pricing if binding is not None else None,
             )
             state.cost_available = (
-                self.provider.is_mock or state.estimated_cost_usd is not None
+                self.provider_for(run_id).is_mock
+                or state.estimated_cost_usd is not None
             )
             event_payload.update(
                 {
@@ -646,6 +779,6 @@ class RunManager:
                 run_id=run_id,
                 node=node,
                 role=role,
-                provider=type(self.provider).__name__,
+                provider=type(self.provider_for(run_id)).__name__,
             )
         return result

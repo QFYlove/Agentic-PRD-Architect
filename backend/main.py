@@ -21,6 +21,12 @@ from backend.config import Settings, get_settings
 from backend.errors import AppError, ProviderUnavailableError
 from backend.event_store import EventStore, SQLiteEventStore
 from backend.observability import log_event
+from backend.provider_catalog import (
+    CatalogModel,
+    CatalogProvider,
+    ModelPricing,
+    ProviderCatalog,
+)
 from backend.providers.base import LLMProvider
 from backend.providers.compatible import OpenAICompatibleLLMProvider
 from backend.providers.mock import MockLLMProvider
@@ -53,6 +59,22 @@ class E2EScenarioRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scenario: str
+
+
+class PublicModel(BaseModel):
+    model_id: str
+    model_display_name: str
+    capabilities: list[str] | None = None
+
+
+class PublicProvider(BaseModel):
+    provider_id: str
+    provider_display_name: str
+    models: list[PublicModel]
+
+
+class PublicProvidersResponse(BaseModel):
+    providers: list[PublicProvider]
 
 
 def error_response(
@@ -158,6 +180,48 @@ def create_app(
         provider=provider,
         run_store=run_store,
         event_store=event_store,
+        catalog=ProviderCatalog(
+            (
+                CatalogProvider(
+                    app_settings.llm_provider
+                    if not app_settings.enable_mock_llm
+                    else "mock",
+                    app_settings.llm_provider
+                    if not app_settings.enable_mock_llm
+                    else "Mock",
+                    (
+                        CatalogModel(
+                            (
+                                "mock-prd-v1"
+                                if app_settings.enable_mock_llm
+                                else (
+                                    app_settings.deepseek_model
+                                    if app_settings.llm_provider == "deepseek"
+                                    else app_settings.glm_model
+                                )
+                            ),
+                            (
+                                "Mock model"
+                                if app_settings.enable_mock_llm
+                                else (
+                                    app_settings.deepseek_model
+                                    if app_settings.llm_provider == "deepseek"
+                                    else app_settings.glm_model
+                                )
+                            ),
+                            app_settings.llm_provider
+                            if not app_settings.enable_mock_llm
+                            else "mock",
+                            provider,
+                            ModelPricing(
+                                app_settings.model_input_price_per_million,
+                                app_settings.model_output_price_per_million,
+                            ),
+                        ),
+                    ),
+                ),
+            )
+        ),
     )
     manager.set_workflow(AgentWorkflow(manager))
 
@@ -178,6 +242,29 @@ def create_app(
     application.state.settings = app_settings
     application.state.manager = manager
     application.state.scenario_controller = scenario_controller
+
+    @application.get(
+        "/api/providers", response_model=PublicProvidersResponse, tags=["system"]
+    )
+    async def list_providers() -> PublicProvidersResponse:
+        return PublicProvidersResponse(
+            providers=[
+                PublicProvider(
+                    provider_id=p.provider_id,
+                    provider_display_name=p.provider_display_name,
+                    models=[
+                        PublicModel(
+                            model_id=m.model_id, model_display_name=m.model_display_name
+                        )
+                        for m in p.models
+                        if m.available
+                    ],
+                )
+                for p in manager.catalog.providers
+                if any(m.available for m in p.models)
+            ]
+        )
+
     application.add_middleware(
         CORSMiddleware,
         allow_origins=app_settings.frontend_origins,

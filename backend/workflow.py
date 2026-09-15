@@ -126,7 +126,7 @@ class AgentWorkflow:
                         "max_iterations": (
                             await self.manager.get_run(run_id)
                         ).max_iterations,
-                        "mock": self.manager.provider.is_mock,
+                        "mock": self.manager.provider_for(run_id).is_mock,
                     },
                 },
             )
@@ -303,7 +303,7 @@ class AgentWorkflow:
                     run_id=run_id,
                     node="generator",
                     attempt=attempt + 1,
-                    provider=type(self.manager.provider).__name__,
+                    provider=type(self.manager.provider_for(run_id)).__name__,
                 )
         else:
             raise RetryableProviderError
@@ -364,15 +364,19 @@ class AgentWorkflow:
         attempt: int,
         record: _AttemptRecord,
     ) -> tuple[str, TokenUsage]:
-        iterator = self.manager.provider.stream_prd(
-            user_idea=state.user_idea,
-            target_audience=state.target_audience,
-            user_constraints=state.user_constraints,
-            iteration=state.current_iteration,
-            revision_plan=plan,
-            baseline_prd=self._baseline_prd(state),
-            output_language=state.output_language,
-        ).__aiter__()
+        iterator = (
+            self.manager.provider_for(run_id)
+            .stream_prd(
+                user_idea=state.user_idea,
+                target_audience=state.target_audience,
+                user_constraints=state.user_constraints,
+                iteration=state.current_iteration,
+                revision_plan=plan,
+                baseline_prd=self._baseline_prd(state),
+                output_language=state.output_language,
+            )
+            .__aiter__()
+        )
         content = ""
         buffer = ""
         last_flush = monotonic()
@@ -510,7 +514,7 @@ class AgentWorkflow:
         state = await self.manager.get_run(run_id)
 
         async def call() -> ProviderStructuredResult:
-            return await self.manager.provider.generate_review(
+            return await self.manager.provider_for(run_id).generate_review(
                 role=role,
                 prd=state.current_prd,
                 iteration=state.current_iteration,
@@ -588,7 +592,7 @@ class AgentWorkflow:
                     node=kind,
                     role=role,
                     attempt=attempt + 2,
-                    provider=type(self.manager.provider).__name__,
+                    provider=type(self.manager.provider_for(run_id)).__name__,
                 )
         assert result is not None
         try:
@@ -597,7 +601,7 @@ class AgentWorkflow:
         except ValidationError as exc:
             repaired = await self._await_provider(
                 run_id,
-                self.manager.provider.repair_structured(
+                self.manager.provider_for(run_id).repair_structured(
                     kind=kind,
                     raw_value=result.value,
                     validation_error=str(exc),
@@ -776,7 +780,7 @@ class AgentWorkflow:
 
         async def call() -> ProviderStructuredResult:
             assert state.latest_evaluation is not None
-            return await self.manager.provider.generate_revision_plan(
+            return await self.manager.provider_for(run_id).generate_revision_plan(
                 evaluation=state.latest_evaluation,
                 iteration=state.current_iteration,
                 user_override=state.pending_user_override,

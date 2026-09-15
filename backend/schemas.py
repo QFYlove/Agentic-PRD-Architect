@@ -104,6 +104,14 @@ class CreateRunRequest(StrictModel):
     user_constraints: str | None = Field(default=None, max_length=2000)
     quality_threshold: float = Field(default=85.0, ge=50, le=100)
     max_iterations: int = Field(default=3, ge=1, le=5)
+    provider_id: str | None = None
+    model_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_selection_pair(self) -> CreateRunRequest:
+        if (self.provider_id is None) != (self.model_id is None):
+            raise ValueError("provider_id and model_id must be provided together")
+        return self
 
     @field_validator("user_idea")
     @classmethod
@@ -317,6 +325,10 @@ def utc_now() -> datetime:
 
 
 class PRDRunState(StrictModel):
+    provider_id: str | None = None
+    provider_display_name: str | None = None
+    model_id: str | None = None
+    model_display_name: str | None = None
     run_id: UUID
     user_idea: str
     target_audience: str | None = None

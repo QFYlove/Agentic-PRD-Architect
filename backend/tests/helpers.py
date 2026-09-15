@@ -4,6 +4,7 @@ from typing import Any
 
 from backend.config import Settings
 from backend.event_store import EventStore, SQLiteEventStore
+from backend.provider_catalog import ProviderCatalog
 from backend.providers.base import LLMProvider
 from backend.providers.mock import MockLLMProvider
 from backend.run_manager import RunManager
@@ -30,6 +31,7 @@ def make_manager(
     *,
     provider: LLMProvider | None = None,
     settings: Settings | None = None,
+    catalog: ProviderCatalog | None = None,
 ) -> RunManager:
     resolved_settings = settings or make_settings()
     resolved_provider = provider or MockLLMProvider(delays_enabled=False)
@@ -46,6 +48,7 @@ def make_manager(
         provider=resolved_provider,
         run_store=store,
         event_store=events,
+        catalog=catalog,
     )
     manager.set_workflow(AgentWorkflow(manager))
     return manager
@@ -56,6 +59,7 @@ def make_sqlite_manager(
     database_path: str,
     provider: LLMProvider | None = None,
     settings: Settings | None = None,
+    catalog: ProviderCatalog | None = None,
 ) -> RunManager:
     """A manager backed by the real SQLite stores, as `create_app` wires them."""
     resolved_settings = settings or make_settings(database_path=database_path)
@@ -76,6 +80,7 @@ def make_sqlite_manager(
         provider=resolved_provider,
         run_store=store,
         event_store=events,
+        catalog=catalog,
     )
     manager.set_workflow(AgentWorkflow(manager))
     return manager
