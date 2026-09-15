@@ -76,8 +76,8 @@ Therefore:
 
 For example:
 
-Kimi Code + Kimi K2.6  
-vs.  
+Kimi Code + Kimi K2.6
+vs.
 Kimi Code + Kimi K3
 
 holds the coding harness, repository baseline, and task prompt constant for Round 1 and Round 2 while changing the underlying model.

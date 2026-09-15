@@ -20,7 +20,7 @@ ZCode is tracked as an extension and does not retroactively change the frozen or
 
 ## Benchmark Baseline
 
-Git tag: `ai-coding-benchmark-v1`  
+Git tag: `ai-coding-benchmark-v1`
 Commit: `0edc069`
 
 ## Structure
