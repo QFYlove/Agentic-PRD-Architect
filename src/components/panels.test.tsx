@@ -1,5 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   initialRunViewState,
@@ -25,7 +26,7 @@ function listTexts(container: HTMLElement): string[] {
 }
 
 describe("ReviewPanel", () => {
-  it("renders all three reviewers with score, summary, strengths, and feedback", () => {
+  it("renders all three reviewers with score, summary, strengths, and findings", () => {
     render(
       <ReviewPanel
         version={1}
@@ -55,35 +56,84 @@ describe("ReviewPanel", () => {
       expect(
         listTexts(screen.getByTestId(`reviewer-strengths-${role}`)),
       ).toEqual(["Clear goal"]);
-      const feedback = screen.getByTestId(`reviewer-feedback-${role}`);
-      expect(within(feedback).getByText("Add an edge case")).toBeTruthy();
-      expect(within(feedback).getByText("重要改进")).toBeTruthy();
+      // Legacy reviews say so instead of inventing dimension scores.
+      expect(screen.getByTestId(`reviewer-legacy-${role}`)).toBeTruthy();
     }
+    // One list for all reviewers, not three narrow columns of prose.
+    const items = within(screen.getByTestId("findings-list")).getAllByTestId(
+      "feedback-item",
+    );
+    expect(items).toHaveLength(3);
+    expect(items.map((item) => item.dataset.roles)).toEqual([
+      "tech",
+      "ux",
+      "biz",
+    ]);
   });
 
-  /**
-   * The three cards deliberately share one surface now -- per-role accent borders
-   * were part of what read as a template. Identity has to survive that, so it is
-   * carried by the icon, the heading, and a machine-readable role attribute.
-   */
-  it("keeps every reviewer identifiable without a per-role accent", () => {
+  it("shows dimension scores, weights and reasons for rubric-scored reviews", () => {
     render(
       <ReviewPanel
         version={1}
+        overall={76}
+        qualityThreshold={85}
         reviews={{
-          tech: makeReview("tech"),
-          ux: makeReview("ux"),
-          biz: makeReview("biz"),
+          tech: {
+            ...makeReview("tech", 78),
+            dimension_scores: [
+              {
+                dimension: "feasibility",
+                score: 4,
+                rationale: "Buildable.",
+                weight: 0.3,
+              },
+              {
+                dimension: "architecture_data",
+                score: 4,
+                rationale: "Clear.",
+                weight: 0.25,
+              },
+              {
+                dimension: "reliability",
+                score: 4,
+                rationale: "Retries.",
+                weight: 0.25,
+              },
+              {
+                dimension: "security_constraints",
+                score: 3,
+                rationale: "Gaps.",
+                weight: 0.2,
+              },
+            ],
+          },
+          ux: makeReview("ux", 76),
+          biz: makeReview("biz", 74),
+        }}
+        findings={{
+          combined: [],
+          beforeDedup: 0,
+          gateStatus: "NEEDS_REVISION",
+          rubricVersion: "2026-11-v2",
+          resolutions: [],
         }}
       />,
     );
-    const roles = (["tech", "ux", "biz"] as const).map(
-      (role) => screen.getByTestId(`reviewer-card-${role}`).dataset.role,
+
+    const dims = screen.getByTestId("reviewer-dimensions-tech");
+    expect(dims.textContent).toContain("技术可行性");
+    expect(dims.textContent).toContain("30%");
+    expect(dims.textContent).toContain("4/5");
+    expect(dims.textContent).toContain("Buildable.");
+    expect(screen.getByTestId("review-overall").textContent).toContain(
+      "(78 + 76 + 74) / 3",
     );
-    expect(roles).toEqual(["tech", "ux", "biz"]);
-    for (const label of ["技术评审", "体验评审", "商业评审"]) {
-      expect(screen.getByRole("heading", { name: label })).toBeTruthy();
-    }
+    expect(screen.getByTestId("review-gate").textContent).toBe("需要修订");
+    const rules = screen.getByTestId("rubric-rules");
+    expect(rules.textContent).toContain("Σ(维度分 / 5 × 权重) × 100");
+    expect(rules.textContent).toContain("用户需求与场景匹配 · 25%");
+    // An empty review is a valid answer, stated plainly.
+    expect(screen.getByTestId("findings-empty")).toBeTruthy();
   });
 
   /**
@@ -91,7 +141,7 @@ describe("ReviewPanel", () => {
    * tier has to be legible as text -- colour alone would strand a reader who
    * cannot separate the hues on exactly the decision that matters most.
    */
-  it("groups findings by severity, blockers first, and labels each tier in text", () => {
+  it("lists findings blockers first, labels each tier in text, and filters", async () => {
     render(
       <ReviewPanel
         version={2}
@@ -99,15 +149,15 @@ describe("ReviewPanel", () => {
           tech: makeReview("tech", 91, [
             makeFeedback("optional", "Nice-to-have polish"),
             makeFeedback("must_fix", "Checkout cannot be built"),
+          ]),
+          ux: makeReview("ux", 90, [
             makeFeedback("should_fix", "Quantify the metric"),
           ]),
         }}
       />,
     );
 
-    const items = within(
-      screen.getByTestId("reviewer-feedback-tech"),
-    ).getAllByTestId("feedback-item");
+    const items = screen.getAllByTestId("feedback-item");
     expect(items.map((item) => item.dataset.severity)).toEqual([
       "must_fix",
       "should_fix",
@@ -117,22 +167,66 @@ describe("ReviewPanel", () => {
     expect(items[0]!.textContent).toContain("Checkout cannot be built");
     expect(items[1]!.textContent).toContain("重要改进");
     expect(items[2]!.textContent).toContain("可选优化");
+
+    await userEvent.click(screen.getByTestId("filter-role-ux"));
+    expect(
+      screen.getAllByTestId("feedback-item").map((item) => item.dataset.roles),
+    ).toEqual(["ux"]);
+    await userEvent.click(screen.getByTestId("filter-role-all"));
+    await userEvent.click(screen.getByTestId("filter-severity-must_fix"));
+    expect(screen.getAllByTestId("feedback-item")).toHaveLength(1);
   });
 
-  it("shows no blocking label when a reviewer only left advice", () => {
+  it("shows a merged finding once, with every reviewer's evidence, and can locate it", async () => {
+    const onLocate = vi.fn();
     render(
       <ReviewPanel
-        version={2}
-        reviews={{
-          tech: makeReview("tech", 91, [
-            makeFeedback("should_fix", "Quantify the metric"),
-            makeFeedback("optional", "Nice-to-have polish"),
-          ]),
+        version={1}
+        reviews={{ tech: makeReview("tech"), ux: makeReview("ux") }}
+        onLocate={onLocate}
+        findings={{
+          combined: [
+            {
+              severity: "must_fix",
+              issue: "Gateway failures have no handling.",
+              recommendation: "建议：Specify retries.",
+              title: "Payment failure handling",
+              section: "5.1 Purchase Flow",
+              evidence: "5.1 never says what happens on failure.",
+              user_impact: "Listeners may be charged twice.",
+              finding_id: "v1-tech-1",
+              source_role: "tech",
+              source_roles: ["tech", "ux"],
+              merged_from: ["v1-ux-1"],
+              observations: [
+                {
+                  finding_id: "v1-ux-1",
+                  role: "ux",
+                  severity: "must_fix",
+                  problem: "No failure screen.",
+                },
+              ],
+            },
+          ],
+          beforeDedup: 2,
+          gateStatus: "NEEDS_REVISION",
+          rubricVersion: null,
+          resolutions: [],
         }}
       />,
     );
-    expect(screen.queryByText("必须修复")).toBeNull();
-    expect(screen.getByText("剩余问题")).toBeTruthy();
+
+    const [item] = screen.getAllByTestId("feedback-item");
+    expect(item!.dataset.roles).toBe("tech,ux");
+    expect(item!.textContent).toContain("2 位评审都提到");
+    expect(item!.textContent).toContain("5.1 never says");
+    expect(item!.textContent).toContain("No failure screen.");
+    // The 「建议：」 prefix is not doubled.
+    expect(item!.textContent).not.toContain("建议：建议");
+    expect(screen.getByText(/2 条评审意见合并为 1 条/)).toBeTruthy();
+    await userEvent.click(screen.getByText("Payment failure handling"));
+    await userEvent.click(screen.getByTestId("feedback-locate"));
+    expect(onLocate).toHaveBeenCalledWith("5.1 Purchase Flow");
   });
 
   it("degrades gracefully when a reviewer has empty summary and lists", () => {
@@ -158,9 +252,9 @@ describe("ReviewPanel", () => {
       "0",
     );
     expect(screen.queryByTestId("reviewer-strengths-tech")).toBeNull();
-    expect(screen.queryByTestId("reviewer-feedback-tech")).toBeNull();
+    expect(screen.queryByTestId("feedback-item")).toBeNull();
     expect(screen.queryByText("做得好")).toBeNull();
-    expect(screen.queryByText("剩余问题")).toBeNull();
+    expect(screen.getByTestId("findings-empty")).toBeTruthy();
   });
 
   it("marks reviewers that have not reported yet instead of inventing content", () => {

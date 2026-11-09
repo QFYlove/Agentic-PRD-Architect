@@ -11,7 +11,7 @@ from backend.config import Settings
 from backend.errors import RunCapacityError, RunConflictError
 from backend.event_store import TRANSIENT_EVENT_TYPES, EventStore
 from backend.language import detect_output_language
-from backend.observability import log_event
+from backend.observability import log_event, log_exception
 from backend.provider_catalog import (
     CatalogModel,
     CatalogProvider,
@@ -24,10 +24,16 @@ from backend.providers.base import LLMProvider
 from backend.run_store import InMemoryRunStore
 from backend.schemas import (
     CreateRunRequest,
+    FailureCategory,
+    GenerationMode,
+    IncompleteDraft,
     NodeStatus,
     NodeTiming,
     PRDVersion,
+    RecoveryAction,
+    RecoveryMode,
     ResumeRunRequest,
+    RunError,
     RunEvent,
     RunEventType,
     RunSnapshot,
@@ -201,47 +207,51 @@ class RunManager:
             )
         return binding.execution.provider
 
-    async def create_run(self, request: CreateRunRequest) -> RunSnapshot:
+    def _binding_for(self, provider_id: str | None, model_id: str | None) -> RunBinding:
+        if provider_id is not None:
+            try:
+                resolved = self.catalog.resolve(provider_id, model_id or "")
+            except ValueError as exc:
+                from backend.errors import AppError
+
+                raise AppError(
+                    "INVALID_PROVIDER_SELECTION",
+                    "The selected provider and model are unavailable.",
+                    422,
+                ) from exc
+            return RunBinding(
+                resolved.provider.provider_id,
+                resolved.provider.provider_display_name,
+                resolved.model.model_id,
+                resolved.model.model_display_name,
+                RunExecution(
+                    resolved.model.provider,
+                    resolved.model.pricing,
+                    resolved.model.provider.is_mock,
+                ),
+            )
+        pricing = ModelPricing(
+            self.settings.model_input_price_per_million,
+            self.settings.model_output_price_per_million,
+        )
+        return RunBinding(
+            "legacy",
+            "Legacy",
+            "legacy",
+            "Legacy",
+            RunExecution(self.provider, pricing, self.provider.is_mock),
+        )
+
+    async def create_run(
+        self,
+        request: CreateRunRequest,
+        *,
+        derived_from: dict[str, Any] | None = None,
+    ) -> RunSnapshot:
         if not self._accepting:
             raise RunConflictError("APP_SHUTTING_DOWN", "The application is stopping.")
         async with self._create_lock:
-            binding: RunBinding
-            if request.provider_id is not None:
-                try:
-                    resolved = self.catalog.resolve(
-                        request.provider_id, request.model_id or ""
-                    )
-                except ValueError as exc:
-                    from backend.errors import AppError
-
-                    raise AppError(
-                        "INVALID_PROVIDER_SELECTION",
-                        "The selected provider and model are unavailable.",
-                        422,
-                    ) from exc
-                binding = RunBinding(
-                    resolved.provider.provider_id,
-                    resolved.provider.provider_display_name,
-                    resolved.model.model_id,
-                    resolved.model.model_display_name,
-                    RunExecution(
-                        resolved.model.provider,
-                        resolved.model.pricing,
-                        resolved.model.provider.is_mock,
-                    ),
-                )
-            else:
-                pricing = ModelPricing(
-                    self.settings.model_input_price_per_million,
-                    self.settings.model_output_price_per_million,
-                )
-                binding = RunBinding(
-                    "legacy",
-                    "Legacy",
-                    "legacy",
-                    "Legacy",
-                    RunExecution(self.provider, pricing, self.provider.is_mock),
-                )
+            binding = self._binding_for(request.provider_id, request.model_id)
             if await self.run_store.active_count() >= self.settings.max_concurrent_runs:
                 raise RunCapacityError
             for evicted in await self.run_store.make_room():
@@ -264,6 +274,8 @@ class RunManager:
                 ),
                 max_iterations=request.max_iterations,
                 quality_threshold=request.quality_threshold,
+                generation_mode=request.generation_mode,
+                trace_id=uuid4().hex,
                 node_statuses={
                     "generator": NodeStatus.PENDING,
                     "tech_reviewer": NodeStatus.PENDING,
@@ -288,6 +300,7 @@ class RunManager:
                 ),
                 created_at=now,
                 updated_at=now,
+                **(derived_from or {}),
             )
             await self.run_store.create(snapshot)
             self._run_bindings[run_id] = binding
@@ -301,10 +314,71 @@ class RunManager:
             LOGGER,
             "run_accepted",
             run_id=run_id,
+            trace_id=snapshot.trace_id,
             provider=type(self.provider).__name__,
             mock=self.provider.is_mock,
+            generation_mode=snapshot.generation_mode,
+            source_run_id=snapshot.source_run_id,
         )
         return snapshot.model_copy(deep=True)
+
+    async def create_recovery_run(
+        self, source_run_id: UUID, mode: RecoveryMode
+    ) -> RunSnapshot:
+        """Start a new run from a finished one; the source run is never modified.
+
+        This is deliberately not a node-level resume. The graph has no
+        checkpointer, so "continue" would have to reconstruct in-flight state the
+        snapshot does not hold. Instead the new run carries the user's original
+        input and, for ``continue_from_best``, the source's best complete version
+        as the document its first generation edits -- plus the source's pending
+        plan when that plan was built from that very version.
+        """
+        source = await self.get_run(source_run_id)
+        if source.status not in TERMINAL_RUN_STATUSES:
+            raise RunConflictError(
+                "RUN_NOT_TERMINAL",
+                "Only a finished, failed, or cancelled run can be recovered.",
+            )
+        derived: dict[str, Any] = {
+            "source_run_id": source.run_id,
+            "recovery_mode": mode,
+        }
+        generation_mode = source.generation_mode
+        if mode in {RecoveryMode.REGENERATE_COMPACT, RecoveryMode.CONTINUE_FROM_BEST}:
+            generation_mode = GenerationMode.COMPACT
+        if mode is RecoveryMode.CONTINUE_FROM_BEST:
+            best = next(
+                (
+                    version
+                    for version in source.versions
+                    if version.version == source.best_version
+                ),
+                source.versions[-1] if source.versions else None,
+            )
+            if best is None:
+                raise RunConflictError(
+                    "NO_COMPLETED_VERSION",
+                    "The run has no completed version to continue from.",
+                )
+            derived["seed_prd"] = best.content
+            derived["source_version"] = best.version
+            plan = source.pending_revision_plan
+            if plan is not None and plan.iteration == best.version:
+                derived["seed_revision_plan"] = plan
+        provider_id = source.provider_id
+        model_id = source.model_id
+        request = CreateRunRequest(
+            user_idea=source.user_idea,
+            target_audience=source.target_audience,
+            user_constraints=source.user_constraints,
+            quality_threshold=source.quality_threshold,
+            max_iterations=source.max_iterations,
+            provider_id=provider_id,
+            model_id=model_id if provider_id is not None else None,
+            generation_mode=generation_mode,
+        )
+        return await self.create_run(request, derived_from=derived)
 
     async def start_run(self, run_id: UUID) -> None:
         if self.workflow is None:
@@ -330,7 +404,10 @@ class RunManager:
             await self.workflow.run(run_id)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
+            # The workflow handles its own failures; anything that reaches here
+            # escaped that handler, so it is logged in full before the run ends.
+            log_exception(LOGGER, "workflow_escaped", exc, run_id=run_id)
             if self.is_cancel_requested(run_id):
                 await self.finalize_cancel(run_id)
             else:
@@ -339,6 +416,8 @@ class RunManager:
                     code="WORKFLOW_FAILED",
                     message="The workflow could not complete.",
                     retryable=False,
+                    recovery_action=RecoveryAction.RETRY,
+                    category=FailureCategory.PERMANENT,
                 )
         finally:
             snapshot = await self.get_run(run_id)
@@ -577,33 +656,101 @@ class RunManager:
         code: str,
         message: str,
         retryable: bool,
+        node: str | None = None,
+        stage: str | None = None,
+        version: int | None = None,
+        attempt: int | None = None,
+        recovery_action: RecoveryAction | None = None,
+        category: FailureCategory | None = None,
     ) -> RunSnapshot:
-        from backend.schemas import RunError
-
         state = await self.get_run(run_id)
         if state.status in TERMINAL_RUN_STATUSES:
             return state
+        error_holder: dict[str, RunError] = {}
 
         def mutate(snapshot: RunSnapshot) -> None:
             snapshot.status = RunStatus.FAILED
-            if snapshot.active_node is not None:
-                snapshot.node_statuses[snapshot.active_node] = NodeStatus.FAILED
-            snapshot.error = RunError(
+            failed_node = node or snapshot.active_node
+            if failed_node is not None:
+                snapshot.node_statuses[failed_node] = NodeStatus.FAILED
+            # Parallel siblings of the failed node were cancelled with it. They
+            # did not fail, and leaving them RUNNING would show three spinners on
+            # a run that has ended.
+            for other, status in list(snapshot.node_statuses.items()):
+                if other != failed_node and status is NodeStatus.RUNNING:
+                    snapshot.node_statuses[other] = NodeStatus.SKIPPED
+            failed_version = version or snapshot.current_iteration
+            completed = {item.version for item in snapshot.versions}
+            if (
+                failed_node in {None, "generator"}
+                and failed_version not in completed
+                and snapshot.current_prd
+                and snapshot.current_prd
+                != (snapshot.versions[-1].content if snapshot.versions else None)
+            ):
+                # The streamed text of a generation that never finished. Kept
+                # for reading, never registered as a version.
+                snapshot.incomplete_draft = IncompleteDraft(
+                    version=failed_version,
+                    attempt=attempt or snapshot.current_prd_attempt,
+                    characters=len(snapshot.current_prd),
+                    error_code=code,
+                )
+            error = RunError(
                 code=code,
                 message=message[:2000],
                 retryable=retryable,
+                stage=stage,
+                node=failed_node,
+                version=failed_version,
+                attempt=attempt,
+                recovery_action=recovery_action,
+                category=category,
+                trace_id=snapshot.trace_id,
+                occurred_at=utc_now(),
             )
+            error_holder["error"] = error
+            snapshot.error = error
             snapshot.completed_at = utc_now()
             snapshot.active_node = None
 
+        # The payload is filled in by the mutation, which runs before the event
+        # is appended, so the event carries exactly what the snapshot stores.
+        payload: dict[str, Any] = {}
+
+        def mutate_and_describe(snapshot: RunSnapshot) -> None:
+            mutate(snapshot)
+            error = error_holder["error"]
+            payload.update(
+                {
+                    "error_code": error.code,
+                    "message": error.message,
+                    "retryable": error.retryable,
+                    "error": error.model_dump(mode="json"),
+                    "incomplete_draft": (
+                        snapshot.incomplete_draft.model_dump(mode="json")
+                        if snapshot.incomplete_draft
+                        else None
+                    ),
+                    "node_statuses": {
+                        key: value.value
+                        for key, value in snapshot.node_statuses.items()
+                    },
+                }
+            )
+
         result = await self.commit(
             run_id,
-            mutate,
+            mutate_and_describe,
             event=RunEventType.RUN_FAILED,
-            payload={"error_code": code, "message": message, "retryable": retryable},
+            payload=payload,
         )
         await self.event_store.wake(run_id)
         return result
+
+    def history(self, run_id: UUID) -> list[RunEvent]:
+        """Every durable event of a run, for replaying a finished run's record."""
+        return self.event_store.history(run_id)
 
     async def record_timing(
         self,
@@ -777,8 +924,10 @@ class RunManager:
                 LOGGER,
                 "node_started",
                 run_id=run_id,
+                trace_id=result.trace_id,
                 node=node,
                 role=role,
                 provider=type(self.provider_for(run_id)).__name__,
+                model=result.model_id,
             )
         return result

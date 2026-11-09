@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   apiUrl,
+  getEvents,
   getSnapshot,
   setScenario,
   startRun,
@@ -15,8 +16,13 @@ for (const failure of [
     code: "STRUCTURED_OUTPUT_INVALID",
   },
   {
+    // A per-call timeout, retried once: distinct from the run's total budget.
     scenario: "provider_timeout",
-    code: "RUN_TIMEOUT",
+    code: "NODE_TIMEOUT",
+  },
+  {
+    scenario: "optimizer_failure",
+    code: "STRUCTURED_OUTPUT_INVALID",
   },
   {
     scenario: "reviewer_failure",
@@ -31,6 +37,8 @@ for (const failure of [
     const runId = await startRun(page);
     await waitForStatus(page, "运行失败");
     await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByTestId("failure-notice-reason")).toBeVisible();
+    await expect(page.getByTestId("failure-notice-stage")).toBeVisible();
     await expect(page.getByTestId("connection-status")).toContainText("已关闭");
     const snapshot = await getSnapshot(request, runId);
     expect(snapshot.status).toBe("FAILED");
@@ -38,6 +46,58 @@ for (const failure of [
     expect(snapshot.error?.message).not.toMatch(/key|credential|Injected/i);
   });
 }
+
+test("an output-cap truncation is not retried and recovers from the best version", async ({
+  page,
+  request,
+}) => {
+  await setScenario(request, "output_truncated");
+  const runId = await startRun(page, { threshold: 100, maxIterations: 3 });
+  await waitForStatus(page, "运行失败");
+
+  const snapshot = await getSnapshot(request, runId);
+  expect(snapshot.error?.code).toBe("PROVIDER_OUTPUT_TRUNCATED");
+  expect(snapshot.versions).toHaveLength(1);
+  const events = await getEvents(request, runId);
+  // One attempt only: no stream reset, so the same request was not re-sent.
+  expect(events.some((event) => event.event === "prd_stream_reset")).toBe(
+    false,
+  );
+
+  // The reader lands on v1, the half-written v2 is marked and not downloadable.
+  await expect(page.getByTestId("prd-version-label")).toContainText("v1");
+  await expect(page.getByTestId("version-tab-v2")).toHaveAttribute(
+    "data-interrupted",
+    "true",
+  );
+  await page.getByTestId("version-tab-v2").click();
+  await expect(page.getByTestId("prd-incomplete-label")).toBeVisible();
+  await expect(page.getByText("正在生成")).toHaveCount(0);
+  await expect(page.getByTestId("download-markdown")).toBeDisabled();
+  await page.screenshot({
+    path: "test-results/layout/desktop-failed-truncation.png",
+    fullPage: false,
+  });
+  await page.getByTestId("workspace-tab-trace").click();
+  await page.screenshot({
+    path: "test-results/layout/desktop-failed-timeline.png",
+    fullPage: false,
+  });
+
+  // Recovery starts a new run from v1 in compact mode; the old run is kept.
+  await page.getByTestId("recover-continue_from_best").click();
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get("run_id"))
+    .not.toBe(runId);
+  const newRunId = new URL(page.url()).searchParams.get("run_id")!;
+  await waitForStatus(page, "已达迭代上限");
+  const recovered = await getSnapshot(request, newRunId);
+  expect(recovered.versions.length).toBeGreaterThan(0);
+  const original = await getSnapshot(request, runId);
+  expect(original.status).toBe("FAILED");
+  expect(original.versions).toHaveLength(1);
+  await setScenario(request, "happy");
+});
 
 test("maximum iteration limit is a distinct non-error terminal", async ({
   page,

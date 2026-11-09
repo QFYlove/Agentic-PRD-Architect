@@ -7,6 +7,8 @@ interface VersionRailProps {
   scores: Record<number, VersionScore>;
   selectedVersion: number | null;
   bestVersion: number | null;
+  /** Versions whose generation stopped before finishing. */
+  interrupted?: number[];
   onSelectVersion(version: number): void;
 }
 
@@ -23,6 +25,7 @@ export function VersionRail({
   scores,
   selectedVersion,
   bestVersion,
+  interrupted = [],
   onSelectVersion,
 }: VersionRailProps) {
   if (versions.length === 0) {
@@ -38,16 +41,18 @@ export function VersionRail({
         const score = scores[version];
         const selected = version === selectedVersion;
         const best = version === bestVersion;
+        const broken = interrupted.includes(version);
         return (
           <button
             key={version}
             data-testid={`version-tab-v${version}`}
             data-best={best}
+            data-interrupted={broken}
             className={`inline-flex shrink-0 items-center gap-1.5 rounded-control border px-2.5 py-1.5 text-xs font-medium transition ${
               selected
                 ? "border-accent bg-accent-soft text-accent"
                 : "border-line bg-raised text-ink-muted hover:border-line-strong hover:text-ink"
-            }`}
+            } ${broken ? "border-dashed" : ""}`}
             type="button"
             role="tab"
             aria-selected={selected}
@@ -66,10 +71,9 @@ export function VersionRail({
             )}
             v{version}
             {score && (
-              <span className="font-mono text-[11px] opacity-80">
-                {score.overall}
-              </span>
+              <span className="text-xs opacity-80">{score.overall}</span>
             )}
+            {broken && <span className="text-xs text-danger">未完成</span>}
             {best && <span className="sr-only">（最佳版本）</span>}
           </button>
         );

@@ -19,8 +19,33 @@ export type NodeStatus =
   | "FAILED"
   | "SKIPPED";
 export type ReviewRole = "tech" | "ux" | "biz";
-export type RevisionSource = ReviewRole | "user";
+export type RevisionSource = ReviewRole | "user" | "optimizer";
 export type RevisionPriority = "high" | "medium" | "low";
+export type ChangeType = "ADD" | "UPDATE" | "REMOVE" | "CONSOLIDATE" | "RETAIN";
+export type GateStatus = "PASSED" | "NEEDS_REVISION" | "BLOCKED" | "UNSCORED";
+export type GenerationMode = "standard" | "compact";
+export type RecoveryMode =
+  | "restart"
+  | "regenerate_compact"
+  | "continue_from_best";
+export type RecoveryAction =
+  | "retry"
+  | "regenerate_compact"
+  | "continue_from_best"
+  | "check_configuration"
+  | "edit_input"
+  | "none";
+export type FailureCategory =
+  | "transient"
+  | "permanent"
+  | "output_limit"
+  | "interrupted";
+export type FindingStatus =
+  | "resolved"
+  | "partially_resolved"
+  | "unresolved"
+  | "declined"
+  | "not_checked";
 
 /**
  * How much a single reviewer finding is allowed to block a run.
@@ -38,10 +63,34 @@ export const FEEDBACK_SEVERITIES: readonly FeedbackSeverity[] = [
   "optional",
 ];
 
+export interface FindingObservation {
+  finding_id: string;
+  role: ReviewRole;
+  severity: FeedbackSeverity;
+  problem: string;
+  evidence?: string | null;
+}
+
+/**
+ * One reviewer finding. The first three fields are the original contract; the
+ * rest arrived with the V2 reviewer contract and are absent on legacy runs.
+ */
 export interface FeedbackItem {
   severity: FeedbackSeverity;
   issue: string;
   recommendation: string;
+  finding_id?: string | null;
+  title?: string | null;
+  category?: string | null;
+  section?: string | null;
+  evidence?: string | null;
+  user_impact?: string | null;
+  source_role?: ReviewRole | null;
+  source_roles?: ReviewRole[];
+  merged_from?: string[];
+  observations?: FindingObservation[];
+  confidence?: number | null;
+  severity_adjusted_from?: FeedbackSeverity | null;
 }
 
 export type RunEventType =
@@ -71,11 +120,22 @@ export interface CreateRunRequest {
   max_iterations: number;
   provider_id?: string;
   model_id?: string;
+  generation_mode?: GenerationMode;
 }
 
-export interface ProviderModel { model_id: string; model_display_name: string; capabilities?: string[] | null }
-export interface Provider { provider_id: string; provider_display_name: string; models: ProviderModel[] }
-export interface ProviderCatalog { providers: Provider[] }
+export interface ProviderModel {
+  model_id: string;
+  model_display_name: string;
+  capabilities?: string[] | null;
+}
+export interface Provider {
+  provider_id: string;
+  provider_display_name: string;
+  models: ProviderModel[];
+}
+export interface ProviderCatalog {
+  providers: Provider[];
+}
 
 export interface ResumeRunRequest {
   user_override?: string | null;
@@ -94,12 +154,34 @@ export interface ControlResponse {
   message: string;
 }
 
+export interface DimensionScore {
+  dimension: string;
+  score: number;
+  rationale: string;
+  weight?: number | null;
+}
+
+export interface FindingResolution {
+  finding_id: string;
+  status: FindingStatus;
+  note?: string | null;
+  source_version?: number | null;
+  title?: string | null;
+  severity?: FeedbackSeverity | null;
+}
+
 export interface RoleReview {
   role: ReviewRole;
   score: number;
   summary: string;
   strengths: string[];
   feedback: FeedbackItem[];
+  /** Empty or absent on reviews scored before the rubric existed. */
+  dimension_scores?: DimensionScore[];
+  rubric_version?: string | null;
+  scoring_version?: string | null;
+  filtered_findings?: number;
+  resolutions?: FindingResolution[];
 }
 
 export interface EvaluationResult {
@@ -108,6 +190,11 @@ export interface EvaluationResult {
   biz: RoleReview;
   overall_score: number;
   combined_feedback: FeedbackItem[];
+  findings_before_dedup?: number | null;
+  gate_status?: GateStatus | null;
+  rubric_version?: string | null;
+  scoring_version?: string | null;
+  finding_resolutions?: FindingResolution[];
 }
 
 export interface RevisionItem {
@@ -117,6 +204,19 @@ export interface RevisionItem {
   required_change: string;
   target_section: string;
   priority: RevisionPriority;
+  item_id?: string | null;
+  change_type?: ChangeType | null;
+  source_finding_ids?: string[];
+  target_sections?: string[];
+  affected_sections?: string[];
+  reason?: string | null;
+  expected_result?: string | null;
+  must_preserve?: string[];
+}
+
+export interface DeclinedFinding {
+  finding_id: string;
+  reason: string;
 }
 
 export interface RevisionPlan {
@@ -124,6 +224,8 @@ export interface RevisionPlan {
   objective: string;
   items: RevisionItem[];
   user_override?: string | null;
+  declined_findings?: DeclinedFinding[];
+  plan_version?: string | null;
 }
 
 export interface TokenUsage {
@@ -136,6 +238,46 @@ export interface RunError {
   code: string;
   message: string;
   retryable: boolean;
+  stage?: string | null;
+  node?: string | null;
+  version?: number | null;
+  attempt?: number | null;
+  recovery_action?: RecoveryAction | null;
+  category?: FailureCategory | null;
+  trace_id?: string | null;
+  occurred_at?: string | null;
+}
+
+/** A generation that streamed text but never became a version. */
+export interface IncompleteDraft {
+  version: number;
+  attempt: number;
+  characters: number;
+  error_code: string;
+}
+
+export interface QualityIssue {
+  code: string;
+  severity: "error" | "warning" | "info";
+  message: string;
+  section?: string | null;
+  line?: number | null;
+  excerpt?: string | null;
+}
+
+export interface PRDQualityReport {
+  characters: number;
+  sections: number;
+  tables: number;
+  list_items: number;
+  paragraphs: number;
+  long_paragraphs: number;
+  longest_paragraph: number;
+  unlabeled_figures?: number;
+  structure_complete: boolean;
+  missing_sections: string[];
+  issues: QualityIssue[];
+  budget_characters?: number | null;
 }
 
 /**
@@ -163,6 +305,8 @@ export interface PRDVersion {
   evaluation?: EvaluationResult | null;
   revision_plan?: RevisionPlan | null;
   token_usage: TokenUsage;
+  quality?: PRDQualityReport | null;
+  generation_mode?: GenerationMode | null;
 }
 
 export interface RunSnapshot {
@@ -209,6 +353,12 @@ export interface RunSnapshot {
   provider_display_name?: string | null;
   model_id?: string | null;
   model_display_name?: string | null;
+  trace_id?: string | null;
+  generation_mode?: GenerationMode;
+  incomplete_draft?: IncompleteDraft | null;
+  source_run_id?: string | null;
+  source_version?: number | null;
+  recovery_mode?: RecoveryMode | null;
 }
 
 export interface RunSummary {
@@ -222,6 +372,7 @@ export interface RunSummary {
   best_score?: number | null;
   created_at: string;
   updated_at: string;
+  source_run_id?: string | null;
 }
 
 export interface RunListResponse {
@@ -238,6 +389,10 @@ export interface RunEvent<
   timestamp: string;
   iteration: number;
   payload: TPayload;
+}
+
+export interface RunHistoryResponse {
+  items: RunEvent[];
 }
 
 export interface ErrorResponse {

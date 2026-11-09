@@ -94,13 +94,33 @@ function normalizeFeedbackItem(value: unknown): FeedbackItem | null {
   if (issue === "" && recommendation === "") {
     return null;
   }
-  return {
-    severity: isFeedbackSeverity(value.severity)
-      ? value.severity
-      : "should_fix",
+  const severity = normalizeSeverity(value.severity);
+  // V2 fields are carried through when present and dropped when malformed, so
+  // a legacy finding and a structured one both render.
+  const item: FeedbackItem = {
+    ...(value as unknown as FeedbackItem),
+    severity: severity ?? "should_fix",
     issue: issue === "" ? recommendation : issue,
     recommendation: recommendation === "" ? issue : recommendation,
   };
+  if (!Array.isArray(item.source_roles)) {
+    delete item.source_roles;
+  }
+  if (!Array.isArray(item.merged_from)) {
+    delete item.merged_from;
+  }
+  if (!Array.isArray(item.observations)) {
+    delete item.observations;
+  }
+  return item;
+}
+
+/** `nice_to_have` is the V2 reviewer contract's name for the `optional` tier. */
+function normalizeSeverity(value: unknown): FeedbackSeverity | null {
+  if (isFeedbackSeverity(value)) {
+    return value;
+  }
+  return value === "nice_to_have" ? "optional" : null;
 }
 
 export function normalizeFeedback(value: unknown): FeedbackItem[] {

@@ -18,14 +18,17 @@ from backend.errors import (
     ProviderRequestRejectedError,
     RetryableProviderError,
 )
+from backend.providers.base import OptimizerContext, ReviewContext, UserRequirements
 from backend.providers.compatible import OpenAICompatibleLLMProvider
 from backend.schemas import (
     EvaluationResult,
+    OptimizerOutput,
+    ReviewerOutput,
     ReviewRole,
-    RevisionPlan,
-    RoleReview,
     TokenUsage,
 )
+from backend.scoring import build_evaluation, normalize_review
+from backend.tests.helpers import finding, review_value, role_review
 
 
 def usage() -> SimpleNamespace:
@@ -302,26 +305,83 @@ async def test_unmapped_status_is_left_untranslated() -> None:
 
 
 def valid_review() -> dict[str, object]:
-    return {
-        "role": "tech",
-        "score": 82,
-        "summary": "Feasible with bounded risks.",
-        "strengths": ["Clear outcome"],
-        "feedback": ["Add retry ownership."],
-    }
+    return review_value(ReviewRole.TECH, score=82)
 
 
 def evaluation() -> EvaluationResult:
+    from backend.schemas import FeedbackSeverity
+
     reviews = [
-        RoleReview(role=role, score=80, summary=f"{role.value} summary")
+        role_review(
+            role,
+            score=80,
+            findings=[finding(FeedbackSeverity.SHOULD_FIX, f"{role.value} gap")],
+        )
         for role in ReviewRole
     ]
-    return EvaluationResult(
-        tech=reviews[0],
-        ux=reviews[1],
-        biz=reviews[2],
-        overall_score=80,
+    built, _ = build_evaluation(*reviews, quality_threshold=85)
+    return built
+
+
+async def test_reviewer_payload_carries_the_users_requirements() -> None:
+    """Reviewers used to receive only the PRD, so they could not judge fit."""
+    adapter, calls = provider([response(valid_review())])
+
+    await adapter.generate_review(
+        role=ReviewRole.TECH,
+        prd="# PRD body",
+        iteration=2,
+        context=ReviewContext(
+            requirements=UserRequirements(
+                user_idea="Build a cloud drive.",
+                user_constraints="Mainland China and overseas.",
+            ),
+            automated_checks=["[fabricated_source] 内部试点"],
+            previous_findings=[{"finding_id": "v1-tech-1", "title": "Quota"}],
+        ),
     )
+
+    user = calls.calls[0]["messages"][1]["content"]
+    payload = json.loads(user.split("<user_input_json>\n", 1)[1].split("\n</", 1)[0])
+    assert payload["user_requirements"]["user_idea"] == "Build a cloud drive."
+    assert payload["user_requirements"]["user_constraints"] == (
+        "Mainland China and overseas."
+    )
+    assert payload["automated_checks"] == ["[fabricated_source] 内部试点"]
+    assert payload["previous_findings"][0]["finding_id"] == "v1-tech-1"
+    assert payload["prd"] == "# PRD body"
+
+
+async def test_optimizer_payload_has_the_prd_and_one_copy_of_the_findings() -> None:
+    """Run 9fa59292: no PRD in the payload, and 43% of it was duplicate findings."""
+    adapter, calls = provider(
+        [response({"objective": "Plan.", "items": [], "declined_findings": []})]
+    )
+    built = evaluation()
+
+    await adapter.generate_revision_plan(
+        evaluation=built,
+        iteration=1,
+        user_override=None,
+        context=OptimizerContext(
+            requirements=UserRequirements(user_idea="Build a cloud drive."),
+            prd="# Current PRD\n\n## 5.5 配额\n- 10 GB",
+            reviewed_version=1,
+            baseline_version=1,
+            findings=[
+                {"finding_id": item.finding_id} for item in built.combined_feedback
+            ],
+        ),
+    )
+
+    user = calls.calls[0]["messages"][1]["content"]
+    payload = json.loads(user.split("<user_input_json>\n", 1)[1].split("\n</", 1)[0])
+    assert payload["prd"].startswith("# Current PRD")
+    assert payload["user_requirements"]["user_idea"] == "Build a cloud drive."
+    assert "evaluation" not in payload
+    # Each finding appears exactly once in the whole request.
+    for item in built.combined_feedback:
+        assert user.count(str(item.finding_id)) == 1
 
 
 async def test_structured_review_uses_native_json_mode_and_schema_prompt() -> None:
@@ -333,8 +393,13 @@ async def test_structured_review_uses_native_json_mode_and_schema_prompt() -> No
         iteration=1,
     )
 
-    assert RoleReview.model_validate(result.value).score == 82
+    output = ReviewerOutput.model_validate(result.value)
+    # The reviewer returns dimensions; the backend computes 82 from them.
+    assert normalize_review(output, version=1).score == 82
     assert calls.calls[0]["response_format"] == {"type": "json_object"}
+    system = calls.calls[0]["messages"][0]["content"]
+    assert "dimension_scores" in system
+    assert '"maximum":5' in system
     assert "JSON Schema" in calls.calls[0]["messages"][0]["content"]
     assert '"additionalProperties":false' in calls.calls[0]["messages"][0]["content"]
 
@@ -349,15 +414,14 @@ async def test_invalid_structure_is_returned_for_workflow_repair() -> None:
     )
 
     with pytest.raises(ValueError):
-        RoleReview.model_validate(result.value)
+        ReviewerOutput.model_validate(result.value)
 
 
 async def test_revision_plan_and_repair_share_structured_contract() -> None:
     repaired = {
-        "iteration": 1,
         "objective": "Repair invalid output.",
         "items": [],
-        "user_override": None,
+        "declined_findings": [],
     }
     adapter, calls = provider([response(repaired), response(repaired)])
 
@@ -372,9 +436,9 @@ async def test_revision_plan_and_repair_share_structured_contract() -> None:
         validation_error="items are invalid",
     )
 
-    assert RevisionPlan.model_validate(plan_result.value).iteration == 1
-    assert RevisionPlan.model_validate(repair_result.value).iteration == 1
-    assert "RevisionPlan" in calls.calls[1]["messages"][0]["content"]
+    assert OptimizerOutput.model_validate(plan_result.value).items == []
+    assert OptimizerOutput.model_validate(repair_result.value).items == []
+    assert "OptimizerOutput" in calls.calls[1]["messages"][0]["content"]
     assert "exactly once" in calls.calls[1]["messages"][1]["content"]
 
 

@@ -9,7 +9,10 @@ from uuid import UUID
 
 from backend.errors import RunNotFoundError, StoreCapacityError
 from backend.schemas import (
+    FailureCategory,
+    IncompleteDraft,
     NodeStatus,
+    RecoveryAction,
     RunError,
     RunSnapshot,
     RunStatus,
@@ -158,6 +161,7 @@ class InMemoryRunStore:
                     best_score=snapshot.best_score,
                     created_at=snapshot.created_at,
                     updated_at=snapshot.updated_at,
+                    source_run_id=snapshot.source_run_id,
                 )
                 for snapshot in snapshots
             ]
@@ -214,7 +218,25 @@ class SQLiteRunStore(InMemoryRunStore):
                     code="RUN_INTERRUPTED",
                     message="The backend restarted before the run completed.",
                     retryable=True,
+                    node=snapshot.active_node,
+                    version=snapshot.current_iteration,
+                    recovery_action=(
+                        RecoveryAction.CONTINUE_FROM_BEST
+                        if snapshot.best_version is not None
+                        else RecoveryAction.RETRY
+                    ),
+                    category=FailureCategory.INTERRUPTED,
+                    trace_id=snapshot.trace_id,
+                    occurred_at=utc_now(),
                 )
+                completed = {version.version for version in snapshot.versions}
+                if snapshot.current_prd and snapshot.current_iteration not in completed:
+                    snapshot.incomplete_draft = IncompleteDraft(
+                        version=snapshot.current_iteration,
+                        attempt=snapshot.current_prd_attempt,
+                        characters=len(snapshot.current_prd),
+                        error_code="RUN_INTERRUPTED",
+                    )
                 snapshot.active_node = None
                 snapshot.completed_at = utc_now()
                 snapshot.updated_at = snapshot.completed_at

@@ -91,3 +91,10 @@ def test_openapi_contains_contract_models() -> None:
         "ErrorResponse",
     ):
         assert model_name in schemas
+
+
+def test_frontend_rubric_contract_matches_the_backend_rubric() -> None:
+    """The 「评分规则」 view reads this file; it must be what the scorer uses."""
+    from backend.rubric import rubric_document
+
+    assert load_contract("rubric.json") == rubric_document()

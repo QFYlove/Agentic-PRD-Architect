@@ -11,6 +11,7 @@ export default {
         canvas: "var(--color-canvas)",
         surface: "var(--color-surface)",
         raised: "var(--color-raised)",
+        sunken: "var(--color-sunken)",
         line: "var(--color-line)",
         "line-strong": "var(--color-line-strong)",
         ink: "var(--color-ink)",
@@ -18,9 +19,11 @@ export default {
         "ink-faint": "var(--color-ink-faint)",
         accent: "var(--color-accent)",
         "accent-soft": "var(--color-accent-soft)",
-        ok: "var(--color-ok)",
-        warn: "var(--color-warn)",
-        danger: "var(--color-danger)",
+        // Hex rather than var() for the status hues, so opacity modifiers such
+        // as `bg-danger/10` compile; the CSS variables keep the same values.
+        ok: "#3baa7a",
+        warn: "#c89a43",
+        danger: "#d46a78",
       },
       borderRadius: {
         // Panels 8px, controls 6px. Nothing larger: the previous 2rem cards are
@@ -29,8 +32,9 @@ export default {
         control: "6px",
       },
       maxWidth: {
-        // A PRD is prose. Past roughly this width the eye loses the line.
-        reading: "78ch",
+        // Past roughly this width the eye loses the line. Expressed in rem, not
+        // ch: `ch` is the width of "0", which made a CJK line ~46 characters.
+        reading: "46rem",
       },
     },
   },

@@ -139,6 +139,24 @@ class EventStore:
         except KeyError as exc:
             raise RunNotFoundError from exc
 
+    def history(self, run_id: UUID) -> list[RunEvent]:
+        """Durable events still held for a run, oldest first.
+
+        Unlike ``replay`` this never raises for an evicted range: a reader opening
+        a finished run wants what exists, not an error about what does not.
+        Transient deltas are excluded -- the document they built is in the
+        snapshot.
+        """
+        try:
+            events = self._events[run_id]
+        except KeyError as exc:
+            raise RunNotFoundError from exc
+        return [
+            event.model_copy(deep=True)
+            for event in events
+            if event.event not in TRANSIENT_EVENT_TYPES
+        ]
+
     def close(self) -> None:
         return None
 
@@ -297,6 +315,20 @@ class SQLiteEventStore(EventStore):
             ORDER BY sequence
             """,
             (str(run_id), after_sequence),
+        ).fetchall()
+        return [RunEvent.model_validate_json(event_json) for (event_json,) in rows]
+
+    def history(self, run_id: UUID) -> list[RunEvent]:
+        """Every persisted event of a retained run, read from SQLite."""
+        if run_id not in self._events:
+            raise RunNotFoundError
+        rows = self._connection.execute(
+            """
+            SELECT event_json FROM run_events
+            WHERE run_id = ?
+            ORDER BY sequence
+            """,
+            (str(run_id),),
         ).fetchall()
         return [RunEvent.model_validate_json(event_json) for (event_json,) in rows]
 

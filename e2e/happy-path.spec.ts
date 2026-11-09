@@ -37,6 +37,18 @@ test("Podcast case completes two reviewed versions and downloads Markdown", asyn
   await expect(page.getByTestId("score-v1")).toContainText("71");
   await expect(page.getByTestId("score-v2")).toContainText("88");
   await expect(page.getByLabel("对比不同 PRD 版本评分的雷达图")).toBeVisible();
+  // The run record is a per-version timeline built from durable state.
+  await expect(page.getByTestId("timeline-v1")).toBeVisible();
+  await expect(
+    page
+      .getByTestId("timeline-v1")
+      .locator('[data-stage="revision_planning"][data-state="done"]'),
+  ).toBeVisible();
+  await expect(page.getByTestId("timeline-final")).toContainText(
+    "质量门槛通过",
+  );
+  // Raw events stay available, folded into the developer section.
+  await page.getByTestId("run-debug").locator("summary").click();
   await expect(page.getByText("优化方案已生成").first()).toBeVisible();
 
   const snapshot = await getSnapshot(request, runId);
@@ -125,7 +137,15 @@ test("Reviewer detail, revision plan, and the v1 to v2 diff follow the selected 
   await page.getByTestId("version-tab-v1").click();
   await expect(reviewPanel).toHaveAttribute("data-version", "1");
   await expect(page.getByTestId("reviewer-score-tech")).toContainText("65");
-  await expect(page.getByTestId("reviewer-feedback-tech")).toBeVisible();
+  await expect(page.getByTestId("findings-list")).toBeVisible();
+  await page.screenshot({
+    path: "test-results/layout/desktop-review-v2-findings.png",
+    fullPage: true,
+  });
+  // Tech and UX raised the same payment-failure gap; it is listed once.
+  await expect(
+    page.getByTestId("feedback-item").filter({ hasText: "Payment failure" }),
+  ).toHaveCount(1);
 
   // The plan built from v1's findings is what produced v2.
   await page.getByTestId("workspace-tab-plan").click();
@@ -173,7 +193,7 @@ test("Reviewer detail, revision plan, and the v1 to v2 diff follow the selected 
   await page.getByTestId("workspace-tab-prd").click();
   await expect(page.getByTestId("version-diff")).toHaveCount(0);
   await expect(page.getByTestId("prd-content")).toContainText(
-    "Reliability, Refunds, and Risk Controls",
+    "Payment Failure and Refunds",
   );
 });
 

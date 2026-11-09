@@ -12,15 +12,23 @@ from backend.providers.mock import MockLLMProvider
 from backend.run_manager import RunManager
 from backend.schemas import (
     CreateRunRequest,
-    FeedbackItem,
     FeedbackSeverity,
     ResumeRunRequest,
+    ReviewerOutput,
     ReviewRole,
-    RoleReview,
     RunEventType,
     RunStatus,
 )
-from backend.tests.helpers import make_manager, make_settings
+from backend.tests.helpers import finding, make_manager, make_settings, review_value
+
+#: A distinct chapter and wording per reviewer, so the aggregator never merges
+#: two roles' findings in tests that count them.
+ROLE_SECTION = {ReviewRole.TECH: 6, ReviewRole.UX: 4, ReviewRole.BIZ: 7}
+ROLE_TOPIC = {
+    ReviewRole.TECH: "Gateway idempotency",
+    ReviewRole.UX: "Screen reader focus",
+    ReviewRole.BIZ: "Refund settlement",
+}
 
 
 class SeverityProvider(MockLLMProvider):
@@ -48,17 +56,19 @@ class SeverityProvider(MockLLMProvider):
             iteration=iteration,
             output_language=output_language,
         )
-        review = RoleReview.model_validate(result.value)
+        output = ReviewerOutput.model_validate(result.value)
         wanted = self.severities.get(iteration, [])
-        result.value = review.model_copy(
+        result.value = output.model_copy(
             update={
-                "feedback": [
-                    FeedbackItem(
-                        severity=severity,
-                        issue=f"{role.value} {severity.value} at v{iteration}",
-                        recommendation="Close the gap in the named section.",
+                # One section per finding, so the aggregator never merges the
+                # findings these tests count.
+                "findings": [
+                    finding(
+                        severity,
+                        f"{ROLE_TOPIC[role]} {severity.value} {index} at v{iteration}",
+                        section=f"{ROLE_SECTION[role]}.{index + 1} {role.value}",
                     )
-                    for severity in wanted
+                    for index, severity in enumerate(wanted)
                 ]
             }
         ).model_dump(mode="json")
@@ -443,6 +453,11 @@ async def test_stream_reset_persists_the_retry_attempt_before_any_delta() -> Non
 
 
 async def test_generator_timeout_retries_then_fails_boundedly() -> None:
+    """A per-call timeout is transient: retried once, then reported as such.
+
+    It used to share ``RUN_TIMEOUT`` -- whose advice is "shrink the request" --
+    with the run running out of its whole budget, which is a different problem.
+    """
     provider = MockLLMProvider(
         delays_enabled=True,
         chunk_size=100,
@@ -463,7 +478,12 @@ async def test_generator_timeout_retries_then_fails_boundedly() -> None:
 
     assert result.status is RunStatus.FAILED
     assert result.error is not None
-    assert result.error.code == "RUN_TIMEOUT"
+    assert result.error.code == "NODE_TIMEOUT"
+    assert result.error.node == "generator"
+    assert result.error.attempt == 2
+    assert result.error.retryable is True
+    attempts = [t for t in result.node_timings if t.node == "generator"]
+    assert [t.attempt for t in attempts] == [1, 2]
 
 
 async def test_total_active_run_timeout_is_enforced() -> None:
@@ -484,6 +504,8 @@ async def test_total_active_run_timeout_is_enforced() -> None:
     assert result.status is RunStatus.FAILED
     assert result.error is not None
     assert result.error.code == "RUN_TIMEOUT"
+    assert result.error.category is not None
+    assert result.error.category.value == "interrupted"
 
 
 async def terminal_payload(manager: RunManager, run_id: object) -> dict[str, object]:
@@ -609,7 +631,7 @@ async def test_capped_run_reports_the_final_round_findings_it_actually_has() -> 
     provider = SeverityProvider(
         dict.fromkeys(
             range(1, 6),
-            [FeedbackSeverity.SHOULD_FIX] * 4 + [FeedbackSeverity.OPTIONAL] * 3,
+            [FeedbackSeverity.SHOULD_FIX] * 3 + [FeedbackSeverity.OPTIONAL] * 2,
         )
     )
     manager = make_manager(provider=provider)
@@ -626,8 +648,8 @@ async def test_capped_run_reports_the_final_round_findings_it_actually_has() -> 
     assert result.status is RunStatus.MAX_ITERATIONS_REACHED
     assert result.latest_evaluation is not None
     counts = result.latest_evaluation.severity_counts()
-    # Three reviewers x (4 advisory + 3 optional) for the final version.
-    assert counts == {"must_fix": 0, "should_fix": 12, "optional": 9}
+    # Three reviewers x (3 advisory + 2 optional) for the final version.
+    assert counts == {"must_fix": 0, "should_fix": 9, "optional": 6}
     payload = await terminal_payload(manager, created.run_id)
     assert payload["threshold_met"] is False
     assert payload["quality_gate_passed"] is False
@@ -639,7 +661,8 @@ async def test_capped_run_reports_the_final_round_findings_it_actually_has() -> 
     final = result.versions[-1].evaluation
     assert final is not None
     assert final.severity_counts() == counts
-    assert len(final.combined_feedback) == 21
+    assert len(final.combined_feedback) == 15
+    assert final.findings_before_dedup == 15
 
 
 class RegressingProvider(SeverityProvider):
@@ -664,10 +687,12 @@ class RegressingProvider(SeverityProvider):
             iteration=iteration,
             output_language=output_language,
         )
-        review = RoleReview.model_validate(result.value)
-        result.value = review.model_copy(
-            update={"score": self.SCORES.get(iteration, 60)}
-        ).model_dump(mode="json")
+        output = ReviewerOutput.model_validate(result.value)
+        result.value = review_value(
+            role,
+            score=self.SCORES.get(iteration, 60),
+            findings=list(output.findings),
+        )
         return result
 
 
