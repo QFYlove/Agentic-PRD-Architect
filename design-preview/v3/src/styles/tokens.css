@@ -1,0 +1,60 @@
+/* V3 design tokens. Light "paper" theme only; a dark theme must be designed
+   separately (product definition 9.3), not derived by inversion. */
+:root {
+  --paper: #f1f0eb;
+  --sheet: #fafaf7;
+  --sheet-2: #f6f5f0;
+  --ink: #17191b;
+  --ink-2: #65686a;
+  --ink-3: #929593;
+  --rule: #c8c9c4;
+  --rule-soft: #dddcd6;
+  --rule-strong: #292c2d;
+  --accent: #d9543d;
+  --accent-ink: #b3402c;
+  --accent-wash: #f6dfd8;
+  --ok: #3d6b4f;
+  --warn: #9a6a12;
+
+  --font-sans: "Inter", "IBM Plex Sans", -apple-system, BlinkMacSystemFont,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC",
+    sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas,
+    monospace;
+
+  /* Type scale (px): 11 meta · 13 ui · 15 body · 17 lead · 22 h3 · 30 h2 · 56–88 display */
+  --t-meta: 11px;
+  --t-ui: 13px;
+  --t-body: 15px;
+  --t-lead: 17px;
+  --t-h3: 22px;
+  --t-h2: 30px;
+  --t-display: clamp(44px, 6.2vw, 88px);
+
+  /* 8px base grid */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+
+  --gutter: 24px;
+  --margin: clamp(16px, 3.4vw, 48px);
+  --header-h: 56px;
+  --strip-h: 28px;
+  --top: calc(var(--strip-h) + var(--header-h));
+
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --fast: 140ms;
+  --base: 220ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --fast: 0ms;
+    --base: 0ms;
+  }
+}

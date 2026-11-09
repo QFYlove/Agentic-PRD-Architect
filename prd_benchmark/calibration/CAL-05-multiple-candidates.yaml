@@ -1,0 +1,68 @@
+id: CAL-05
+title: 多个候选相互独立：一个确认、一个否决、一个待定
+case_id: PQB-P05
+covers: [multiple_candidates]
+document: |-
+  # 批量上架 PRD
+  渠道 A 限流 100 次/秒，渠道 B 限流 10 次/秒。
+  某一渠道失败时整个任务立即终止，其他渠道停止同步。
+  商家取消任务后，系统自动下架本次已上架成功的商品。
+  任务结果保留 30 天。
+responses:
+  - fill: {verdict: covered, quote: 任务结果保留 30 天}
+    items:
+      R4:
+        verdict: partial
+        quote: 渠道 A 限流 100 次/秒，渠道 B 限流 10 次/秒
+        hard_constraint_claim:
+          violated_constraint: H1
+          quotes: [渠道 A 限流 100 次/秒]
+          behavior_impact: 「渠道 A 限流 100 次/秒」会以两倍于题面上限的速率调用渠道 A，触发渠道限流拒绝
+          defect_key: channel-a-rate-limit
+      R3:
+        verdict: missing
+        hard_constraint_claim:
+          violated_constraint: H2
+          quotes: [某一渠道失败时整个任务立即终止，其他渠道停止同步]
+          behavior_impact: 「某一渠道失败时整个任务立即终止」使一个渠道的故障中断其余渠道的同步
+          defect_key: channel-failure-stops-all
+      R9:
+        verdict: partial
+        quote: 商家取消任务后，系统自动下架本次已上架成功的商品
+        hard_constraint_claim:
+          violated_constraint: H4
+          quotes: [商家取消任务后，系统自动下架本次已上架成功的商品]
+          behavior_impact: 「系统自动下架本次已上架成功的商品」会把取消前已成功上架的商品撤下，题面要求保持上架
+          defect_key: cancel-unlists-success
+reviews:
+  # R weights 19 (14 items, 5 core). Base credits: R4 0.5 (plain), R3 0 (core),
+  # R9 0.5 (core, weight 2 -> 1). Lost: 0.5 + 2 + 1 = 3.5 -> 15.5/19.
+  - name: mixed
+    human:
+      decisions:
+        - {claim: [H1, channel-a-rate-limit], decision: confirmed}
+        - {claim: [H2, channel-failure-stops-all], decision: rejected}
+    expect:
+      status: pending
+      final_total: null
+      # Settled: H1 confirmed (R4 credit 0 -> lost 4.0 -> 15/19), cap 1.
+      # 25 x 15/19 = 19.7368; dims 5 + 55 = 60 -> 79.7368. H4 still pending.
+      if_rejected_total: 79.7368
+      # H4 confirmed too: R9 credit 0 -> lost 5.0 -> 14/19 = 18.4211 -> 78.4211.
+      if_confirmed_total: 78.4211
+      # base applies no claim at all.
+      base_total: 95.3947
+      candidates:
+        - {rule_id: G1, violated_constraint: H1, decision: confirmed}
+        - {rule_id: G1, violated_constraint: H2, decision: rejected}
+        - {rule_id: G1, violated_constraint: H4, decision: pending}
+  - name: all-decided
+    human:
+      decisions:
+        - {claim: [H1, channel-a-rate-limit], decision: confirmed}
+        - {claim: [H2, channel-failure-stops-all], decision: rejected}
+        - {claim: [H4, cancel-unlists-success], decision: rejected}
+    expect:
+      status: final
+      final_total: 79.7368
+      provisional_pass: false

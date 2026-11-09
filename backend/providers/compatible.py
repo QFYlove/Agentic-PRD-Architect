@@ -21,20 +21,24 @@ from backend.errors import (
 )
 from backend.language import DEFAULT_OUTPUT_LANGUAGE, language_directive
 from backend.prompts import (
-    GENERATOR_SYSTEM_PROMPT,
     OPTIMIZER_SYSTEM_PROMPT,
     REVIEWER_PROMPTS,
+    generator_system_prompt,
 )
 from backend.providers.base import (
     LLMProvider,
+    OptimizerContext,
     ProviderStructuredResult,
     ProviderTextEvent,
+    ReviewContext,
 )
 from backend.schemas import (
     EvaluationResult,
+    GenerationMode,
+    OptimizerOutput,
+    ReviewerOutput,
     ReviewRole,
     RevisionPlan,
-    RoleReview,
     TokenUsage,
 )
 
@@ -96,6 +100,23 @@ class OpenAICompatibleLLMProvider(LLMProvider):
             return RetryableProviderError("Provider service unavailable")
         return None
 
+    @staticmethod
+    def _retry_after(error: Exception) -> float | None:
+        """Seconds from a ``Retry-After`` header, when the response carried one."""
+        response = getattr(error, "response", None)
+        headers = getattr(response, "headers", None)
+        if headers is None:
+            return None
+        try:
+            value = headers.get("retry-after")
+        except Exception:  # pragma: no cover - exotic header containers
+            return None
+        try:
+            seconds = float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+        return seconds if seconds is not None and seconds >= 0 else None
+
     @classmethod
     def _translate_error(cls, error: Exception) -> Exception:
         if isinstance(error, openai.AuthenticationError):
@@ -103,9 +124,14 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         if isinstance(error, openai.APITimeoutError | openai.APIConnectionError):
             return RetryableProviderError("Provider transport failed")
         if isinstance(error, openai.RateLimitError):
-            return RetryableProviderError("Provider rate limit reached")
+            return RetryableProviderError(
+                "Provider rate limit reached",
+                retry_after=cls._retry_after(error),
+            )
         if isinstance(error, openai.APIStatusError):
             translated = cls._translate_status(error.status_code)
+            if isinstance(translated, RetryableProviderError):
+                translated.retry_after = cls._retry_after(error)
             if translated is not None:
                 return translated
         return error
@@ -171,35 +197,81 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         revision_plan: RevisionPlan | None,
         baseline_prd: str | None = None,
         output_language: str = DEFAULT_OUTPUT_LANGUAGE,
+        generation_mode: GenerationMode = GenerationMode.STANDARD,
+    ) -> AsyncIterator[ProviderTextEvent]:
+        async for event in self._stream_messages(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        f"{generator_system_prompt(generation_mode)}\n\n"
+                        f"{language_directive(output_language)}"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": self._untrusted_payload(
+                        user_idea=user_idea,
+                        target_audience=target_audience,
+                        user_constraints=user_constraints,
+                        iteration=iteration,
+                        revision_plan=(
+                            revision_plan.model_dump(mode="json")
+                            if revision_plan is not None
+                            else None
+                        ),
+                        baseline_prd=baseline_prd,
+                        generation_mode=generation_mode.value,
+                    ),
+                },
+            ]
+        ):
+            yield event
+
+    def stream_call(
+        self,
+        *,
+        instructions: str,
+        payload: dict[str, Any],
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
+    ) -> AsyncIterator[ProviderTextEvent]:
+        """Stream plain text for a V3 task (one PRD section)."""
+        return self._stream_messages(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        f"{instructions}\n\n{language_directive(output_language)}"
+                    ),
+                },
+                {"role": "user", "content": self._untrusted_payload(**payload)},
+            ]
+        )
+
+    async def structured_call(
+        self,
+        *,
+        model_type: type[BaseModel],
+        instructions: str,
+        payload: dict[str, Any],
+        output_language: str = DEFAULT_OUTPUT_LANGUAGE,
+    ) -> ProviderStructuredResult:
+        """One JSON-object call for a V3 task, validated by the caller."""
+        return await self._structured(
+            model_type=model_type,
+            instructions=instructions,
+            input_text=self._untrusted_payload(**payload),
+            output_language=output_language,
+        )
+
+    async def _stream_messages(
+        self, messages: list[dict[str, str]]
     ) -> AsyncIterator[ProviderTextEvent]:
         stream: Any | None = None
         try:
             stream = await self.client.chat.completions.create(
                 model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            f"{GENERATOR_SYSTEM_PROMPT}\n\n"
-                            f"{language_directive(output_language)}"
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": self._untrusted_payload(
-                            user_idea=user_idea,
-                            target_audience=target_audience,
-                            user_constraints=user_constraints,
-                            iteration=iteration,
-                            revision_plan=(
-                                revision_plan.model_dump(mode="json")
-                                if revision_plan is not None
-                                else None
-                            ),
-                            baseline_prd=baseline_prd,
-                        ),
-                    },
-                ],
+                messages=messages,
                 stream=True,
                 stream_options={"include_usage": True},
                 timeout=self.request_timeout_seconds,
@@ -305,15 +377,22 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         prd: str,
         iteration: int,
         output_language: str = DEFAULT_OUTPUT_LANGUAGE,
+        context: ReviewContext | None = None,
     ) -> ProviderStructuredResult:
+        payload: dict[str, object] = {
+            "required_role": role.value,
+            "iteration": iteration,
+        }
+        if context is not None:
+            payload["user_requirements"] = context.requirements.model_dump(mode="json")
+            payload["automated_checks"] = context.automated_checks
+            if context.previous_findings:
+                payload["previous_findings"] = context.previous_findings
+        payload["prd"] = prd
         return await self._structured(
-            model_type=RoleReview,
+            model_type=ReviewerOutput,
             instructions=REVIEWER_PROMPTS[role.value],
-            input_text=self._untrusted_payload(
-                required_role=role.value,
-                prd=prd,
-                iteration=iteration,
-            ),
+            input_text=self._untrusted_payload(**payload),
             output_language=output_language,
         )
 
@@ -324,15 +403,34 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         iteration: int,
         user_override: str | None,
         output_language: str = DEFAULT_OUTPUT_LANGUAGE,
+        context: OptimizerContext | None = None,
     ) -> ProviderStructuredResult:
+        if context is None:
+            # Only reachable from a caller that predates the context; it still
+            # sends one copy of the findings, never the per-role duplicates.
+            payload: dict[str, object] = {
+                "findings": [
+                    item.model_dump(mode="json", exclude_none=True)
+                    for item in evaluation.combined_feedback
+                ],
+            }
+        else:
+            payload = {
+                "user_requirements": context.requirements.model_dump(mode="json"),
+                "reviewed_version": context.reviewed_version,
+                "baseline_version": context.baseline_version,
+                "role_scores": context.role_scores,
+                "findings": context.findings,
+                "quality_report": context.quality_report,
+                "prd_is_excerpt": context.prd_is_excerpt,
+                "prd": context.prd,
+            }
+        payload["iteration"] = iteration
+        payload["user_override"] = user_override
         return await self._structured(
-            model_type=RevisionPlan,
+            model_type=OptimizerOutput,
             instructions=OPTIMIZER_SYSTEM_PROMPT,
-            input_text=self._untrusted_payload(
-                evaluation=evaluation.model_dump(mode="json"),
-                iteration=iteration,
-                user_override=user_override,
-            ),
+            input_text=self._untrusted_payload(**payload),
             output_language=output_language,
         )
 
@@ -345,7 +443,9 @@ class OpenAICompatibleLLMProvider(LLMProvider):
         role: ReviewRole | None = None,
         output_language: str = DEFAULT_OUTPUT_LANGUAGE,
     ) -> ProviderStructuredResult:
-        model_type: type[BaseModel] = RoleReview if kind == "review" else RevisionPlan
+        model_type: type[BaseModel] = (
+            ReviewerOutput if kind == "review" else OptimizerOutput
+        )
         instructions = (
             REVIEWER_PROMPTS[role.value]
             if kind == "review" and role is not None

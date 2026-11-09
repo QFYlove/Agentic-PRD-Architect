@@ -278,7 +278,7 @@ for (const viewport of VIEWPORTS) {
       width: viewport.width,
       height: viewport.height,
     });
-    await page.goto(`/?run_id=${RUN_ID}`);
+    await page.goto(`/runs?run_id=${RUN_ID}`);
     await expect(page.getByTestId("run-status")).toHaveText("已完成");
 
     // The long document really is long: if the fixture ever shrinks, the rest of
@@ -379,6 +379,8 @@ for (const viewport of VIEWPORTS) {
 
     // Which node owned the run's time, in 运行记录 rather than beside the document.
     await page.getByTestId("workspace-tab-trace").click();
+    // Node timings are developer detail: one click further, inside 运行记录.
+    await page.getByTestId("run-debug").locator("summary").click();
     await expect(page.getByTestId("node-timings")).toBeVisible();
     const timings = page.getByTestId("node-timing-row");
     await expect(timings).toHaveCount(7);
@@ -400,7 +402,7 @@ test("The long v1 to v2 comparison reads as a document, not as Markdown source",
 }) => {
   await stubLongRun(page);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto(`/?run_id=${RUN_ID}`);
+  await page.goto(`/runs?run_id=${RUN_ID}`);
   await expect(page.getByTestId("run-status")).toHaveText("已完成");
 
   await page.getByTestId("workspace-tab-diff").click();

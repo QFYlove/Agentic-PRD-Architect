@@ -1,0 +1,93 @@
+id: PQB-P92
+title: 差旅报销（Judge 校准用）
+category: calibration_ambiguous
+case_version: v0.1
+status: draft
+
+frozen_input:
+  user_idea: |-
+    为公司设计差旅报销流程。员工出差回来后提交报销单并上传发票，部门经理审批，财务复核后打款。金额较大的报销需要更高层级审批。希望报销尽快到账。
+  target_audience: |-
+    员工、部门经理、财务。
+  user_constraints: |-
+    发票必须为真实有效的电子发票。财务要求所有报销单必须由财务人工复核；业务部门要求 1000 元以下的报销自动通过、当天到账。报销单提交后 30 天内必须完成打款。
+
+evaluator_context: |-
+  含糊需求（"金额较大""尽快"）、一组相互冲突的要求（财务人工复核 vs 小额自动通过），
+  用于校准 Judge 对待澄清项、冲突取舍和合理替代方案的判定。
+
+hard_constraints:
+  - id: H1
+    text: 报销单提交后 30 天内必须完成打款
+    quote: 报销单提交后 30 天内必须完成打款
+  - id: H2
+    text: 发票必须为真实有效的电子发票
+    quote: 发票必须为真实有效的电子发票
+
+conflicts:
+  - id: K1
+    sides: [所有报销单必须由财务人工复核, 1000 元以下的报销自动通过、当天到账]
+    items: [R4, R5]
+
+required_items:
+  - id: R1
+    text: 提交报销单与上传发票
+    source: E
+    core: true
+    impact: 流程无起点
+    check: 有提交与上传
+  - id: R2
+    text: 部门经理审批、财务复核、打款的顺序
+    source: E
+    core: true
+    impact: 审批链不清会导致越级打款
+    check: 顺序正确
+  - id: R3
+    text: 发票真实性校验方式
+    source: ED
+    core: false
+    rationale: 题面要求真实有效，但未给出校验方式
+    check: 给出校验方式或列为待确认
+  - id: R4
+    text: 识别「财务人工复核」与「小额自动通过」的冲突
+    source: E
+    core: true
+    impact: 未识别时会静默放弃一方的要求
+    check: 明确指出两者不能同时满足
+  - id: R5
+    text: 给出冲突的取舍方案、被放弃的要求和决策人
+    source: D
+    core: true
+    impact: 没有方案则无法开发
+    rationale: 只指出冲突无法拍板
+    check: 方案、放弃项、决策人三者都有；推荐哪一侧都可以
+  - id: R6
+    text: 30 天内打款的时限与超时处理
+    source: ED
+    core: false
+    rationale: 时限是题面给定的；超时处理题面未给
+    check: 时限正确
+
+clarifications:
+  - id: C1
+    question: 「金额较大」的阈值与更高层级审批人
+    core: true
+    impact: 没有阈值，分级审批无法实现
+    accept: 提出问题，或给出阈值并标注为假设
+  - id: C2
+    question: 「尽快到账」的目标时效
+    core: false
+    accept: 提出问题，或给出目标并标注为假设
+
+acceptable_assumptions:
+  - 金额 5000 元以上需总监审批（标注为假设）
+  - 小额报销先自动打款、财务事后抽查（作为冲突取舍方案并列入待确认）
+
+critical_defects:
+  - id: P92-X1
+    condition: 同时写入"全部人工复核"和"小额自动通过"而不处理二者矛盾
+  - id: P92-X2
+    condition: 设计上允许超过 30 天才打款
+
+judge_notes: |-
+  只用于 Judge 校准，不参与 Pilot。冲突取任一侧并写明取舍都可接受。

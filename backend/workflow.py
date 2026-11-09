@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import warnings
 from collections.abc import Awaitable, Callable
@@ -21,33 +22,73 @@ with warnings.catch_warnings():
     from langgraph.graph import END, START, StateGraph
 
 from backend.errors import (
-    InvalidModelError,
-    ProviderAuthenticationError,
+    NodeTimeoutError,
     ProviderError,
     RetryableProviderError,
+    RunTimeoutError,
 )
-from backend.observability import log_event
+from backend.failures import (
+    NODE_STAGES,
+    TRANSIENT_ATTEMPTS,
+    backoff_seconds,
+    classify,
+    context_of,
+    is_transient,
+    tag,
+)
+from backend.observability import log_event, log_exception
 from backend.prd_document import classify_finish_reason, validate_generated_prd
-from backend.providers.base import ProviderStructuredResult
+from backend.prd_quality import check_prd, outline, sections_matching
+from backend.providers.base import (
+    OptimizerContext,
+    ProviderStructuredResult,
+    ReviewContext,
+    UserRequirements,
+)
 from backend.run_manager import RunManager
 from backend.schemas import (
     EvaluationResult,
-    FeedbackSeverity,
+    FeedbackItem,
     NodeStatus,
+    OptimizerOutput,
+    PRDQualityReport,
     PRDVersion,
+    ReviewerOutput,
     ReviewRole,
     RevisionPlan,
-    RoleReview,
     RunEventType,
     RunSnapshot,
     RunStatus,
     TokenUsage,
     utc_now,
 )
+from backend.scoring import build_evaluation, build_revision_plan, normalize_review
 from backend.state_machine import TERMINAL_RUN_STATUSES
 
 T = TypeVar("T")
 LOGGER = logging.getLogger("agentic_prd.workflow")
+
+
+def _accepted(method: Callable[..., Any], **optional: Any) -> dict[str, Any]:
+    """The subset of ``optional`` keyword arguments ``method`` declares.
+
+    ``context`` and ``generation_mode`` were added to the provider interface in
+    V2. A provider written against the earlier interface -- including every test
+    double that overrides one method -- still works: it simply does not receive
+    the new arguments, and degrades to the old behaviour for that call.
+    """
+    try:
+        parameters = inspect.signature(method).parameters
+    except (TypeError, ValueError):  # pragma: no cover - builtins
+        return {}
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return optional
+    return {key: value for key, value in optional.items() if key in parameters}
+
+
+#: Above this the optimizer gets an outline plus the sections its findings name,
+#: instead of the whole document. Roughly 20k tokens of Chinese text.
+OPTIMIZER_FULL_PRD_CHARACTERS = 60_000
 
 
 class WorkflowState(TypedDict):
@@ -79,22 +120,95 @@ class _AttemptRecord:
         return monotonic() - self.started
 
 
+def _requirements(state: RunSnapshot) -> UserRequirements:
+    return UserRequirements(
+        user_idea=state.user_idea,
+        target_audience=state.target_audience,
+        user_constraints=state.user_constraints,
+    )
+
+
+def _user_text(state: RunSnapshot) -> str:
+    return "\n".join(
+        part
+        for part in (state.user_idea, state.target_audience, state.user_constraints)
+        if part
+    )
+
+
+def _finding_payload(item: FeedbackItem) -> dict[str, Any]:
+    """One finding as a model reads it: no merge bookkeeping, no observations."""
+    return {
+        key: value
+        for key, value in {
+            "finding_id": item.finding_id,
+            "severity": item.severity.value,
+            "category": item.category.value if item.category else None,
+            "title": item.title,
+            "section": item.section,
+            "evidence": item.evidence,
+            "problem": item.issue,
+            "user_impact": item.user_impact,
+            "recommendation": item.recommendation,
+            "source_roles": [role.value for role in item.source_roles],
+        }.items()
+        if value not in (None, [], "")
+    }
+
+
+def _automated_checks(report: PRDQualityReport | None) -> list[str]:
+    """The checker's findings as short lines a reviewer can confirm or discard."""
+    if report is None:
+        return []
+    lines: list[str] = []
+    for issue in report.issues:
+        if issue.severity == "info":
+            continue
+        where = f" (line {issue.line})" if issue.line else ""
+        excerpt = f' "{issue.excerpt}"' if issue.excerpt else ""
+        lines.append(f"[{issue.code}] {issue.message}{where}{excerpt}")
+    return lines[:20]
+
+
+def _quality_summary(report: PRDQualityReport | None) -> dict[str, Any]:
+    if report is None:
+        return {}
+    return {
+        "characters": report.characters,
+        "budget_characters": report.budget_characters,
+        "long_paragraphs": report.long_paragraphs,
+        "unlabeled_figures": report.unlabeled_figures,
+        "structure_complete": report.structure_complete,
+        "missing_sections": report.missing_sections,
+        "issues": [
+            {"code": issue.code, "message": issue.message, "section": issue.section}
+            for issue in report.issues[:15]
+        ],
+    }
+
+
 class AgentWorkflow:
     def __init__(self, manager: RunManager) -> None:
         self.manager = manager
         graph = StateGraph(WorkflowState)
-        graph.add_node("generator", self._generator_node)  # type: ignore[call-overload]
         graph.add_node(  # type: ignore[call-overload]
-            "tech_reviewer", self._tech_reviewer_node
+            "generator", self._guard("generator", self._generator_node)
         )
         graph.add_node(  # type: ignore[call-overload]
-            "ux_reviewer", self._ux_reviewer_node
+            "tech_reviewer", self._guard("tech_reviewer", self._tech_reviewer_node)
         )
         graph.add_node(  # type: ignore[call-overload]
-            "biz_reviewer", self._biz_reviewer_node
+            "ux_reviewer", self._guard("ux_reviewer", self._ux_reviewer_node)
         )
-        graph.add_node("aggregator", self._aggregator_node)  # type: ignore[call-overload]
-        graph.add_node("optimizer", self._optimizer_node)  # type: ignore[call-overload]
+        graph.add_node(  # type: ignore[call-overload]
+            "biz_reviewer", self._guard("biz_reviewer", self._biz_reviewer_node)
+        )
+        graph.add_node(  # type: ignore[call-overload]
+            "aggregator", self._guard("aggregator", self._aggregator_node)
+        )
+        graph.add_node(  # type: ignore[call-overload]
+            "optimizer", self._guard("optimizer", self._optimizer_node)
+        )
         graph.add_edge(START, "generator")
         graph.add_edge("generator", "tech_reviewer")
         graph.add_edge("generator", "ux_reviewer")
@@ -110,6 +224,36 @@ class AgentWorkflow:
         )
         graph.add_edge("optimizer", "generator")
         self.graph = graph.compile()
+
+    def _guard(
+        self,
+        node: str,
+        function: Callable[[WorkflowState], Awaitable[dict[str, Any]]],
+    ) -> Callable[[WorkflowState], Awaitable[dict[str, Any]]]:
+        """Label any exception with the node it came from.
+
+        The three reviewers run in parallel, so "the last node marked RUNNING"
+        names whichever reviewer started last, not the one that failed. Tagging
+        at the node boundary names the one whose code actually raised.
+        """
+
+        async def guarded(graph_state: WorkflowState) -> dict[str, Any]:
+            try:
+                return await function(graph_state)
+            except WorkflowCancelled:
+                raise
+            except Exception as exc:
+                version: int | None = None
+                try:
+                    version = (
+                        await self.manager.get_run(graph_state["run_id"])
+                    ).current_iteration
+                except Exception:  # pragma: no cover - the run is gone
+                    version = None
+                tag(exc, node=node, stage=NODE_STAGES[node], version=version)
+                raise
+
+        return guarded
 
     async def run(self, run_id: UUID) -> None:
         try:
@@ -127,6 +271,9 @@ class AgentWorkflow:
                             await self.manager.get_run(run_id)
                         ).max_iterations,
                         "mock": self.manager.provider_for(run_id).is_mock,
+                        "generation_mode": (
+                            await self.manager.get_run(run_id)
+                        ).generation_mode.value,
                     },
                 },
             )
@@ -136,67 +283,55 @@ class AgentWorkflow:
             )
         except WorkflowCancelled:
             await self.manager.finalize_cancel(run_id)
-        except (ProviderAuthenticationError, InvalidModelError) as exc:
-            await self._fail_unless_cancelled(
-                run_id,
-                code=exc.code,
-                message=exc.user_message,
-                retryable=False,
-            )
-        except RetryableProviderError as exc:
-            await self._fail_unless_cancelled(
-                run_id,
-                code=exc.code,
-                message=exc.user_message,
-                retryable=True,
-            )
-        except ProviderError as exc:
-            # Any translated provider failure keeps its own stable code instead
-            # of degrading into the generic WORKFLOW_FAILED from RunManager.
-            await self._fail_unless_cancelled(
-                run_id,
-                code=exc.code,
-                message=exc.user_message,
-                retryable=exc.retryable,
-            )
-        except TimeoutError:
-            await self._fail_unless_cancelled(
-                run_id,
-                code="RUN_TIMEOUT",
-                message="The run exceeded a configured timeout.",
-                retryable=True,
-            )
-        except ValidationError:
-            await self._fail_unless_cancelled(
-                run_id,
-                code="STRUCTURED_OUTPUT_INVALID",
-                message="The provider returned invalid structured output.",
-                retryable=False,
-            )
+        except Exception as exc:
+            await self._handle_failure(run_id, exc)
 
-    async def _fail_unless_cancelled(
-        self,
-        run_id: UUID,
-        *,
-        code: str,
-        message: str,
-        retryable: bool,
-    ) -> None:
+    async def _handle_failure(self, run_id: UUID, exc: Exception) -> None:
         if self.manager.is_cancel_requested(run_id):
             await self.manager.finalize_cancel(run_id)
             return
+        state = await self.manager.get_run(run_id)
+        info = classify(exc, has_best_version=state.best_version is not None)
+        context = context_of(exc)
+        fields = {
+            "run_id": run_id,
+            "trace_id": state.trace_id,
+            "node": context.get("node"),
+            "stage": context.get("stage"),
+            "version": context.get("version"),
+            "attempt": context.get("attempt"),
+            "error_code": info.code,
+            "provider": state.provider_id
+            or type(self.manager.provider_for(run_id)).__name__,
+            "model": state.model_id,
+        }
+        if info.code in {
+            "WORKFLOW_FAILED",
+            "STRUCTURED_OUTPUT_INVALID",
+        } or not isinstance(exc, ProviderError | TimeoutError | ValidationError):
+            # Unknown causes are the ones nobody can diagnose from a code alone,
+            # so they keep their (redacted) stack.
+            log_exception(LOGGER, "workflow_failed", exc, **fields)
+        else:
+            log_event(LOGGER, "workflow_failed", level=logging.WARNING, **fields)
         await self.manager.fail_run(
             run_id,
-            code=code,
-            message=message,
-            retryable=retryable,
+            code=info.code,
+            message=info.message,
+            retryable=info.retryable,
+            node=_text(context.get("node")),
+            stage=_text(context.get("stage")),
+            version=_number(context.get("version")),
+            attempt=_number(context.get("attempt")),
+            recovery_action=info.recovery_action,
+            category=info.category,
         )
 
     async def _check_cancel(self, run_id: UUID) -> None:
         if self.manager.is_cancel_requested(run_id):
             raise WorkflowCancelled
         if self.manager.remaining_run_seconds(run_id) <= 0:
-            raise TimeoutError
+            raise RunTimeoutError
 
     async def _await_provider(
         self,
@@ -209,7 +344,9 @@ class AgentWorkflow:
         cancelled = asyncio.create_task(self.manager.cancel_signals[run_id].wait())
         try:
             await self._check_cancel(run_id)
-            timeout = min(node_timeout, self.manager.remaining_run_seconds(run_id))
+            remaining = self.manager.remaining_run_seconds(run_id)
+            run_bound = remaining < node_timeout
+            timeout = min(node_timeout, remaining)
             done, _ = await asyncio.wait(  # type: ignore[type-var]
                 {operation, cancelled},
                 timeout=timeout,
@@ -217,7 +354,7 @@ class AgentWorkflow:
             )
             if not done:
                 operation.cancel()
-                raise TimeoutError
+                raise RunTimeoutError if run_bound else NodeTimeoutError
             if cancelled in done and cancelled.result():
                 operation.cancel()
                 raise WorkflowCancelled
@@ -227,6 +364,24 @@ class AgentWorkflow:
             if not operation.done():
                 operation.cancel()
             await asyncio.gather(operation, cancelled, return_exceptions=True)
+
+    async def _backoff(self, run_id: UUID, error: BaseException, attempt: int) -> None:
+        """Wait before retrying a transient failure; a cancel ends the wait."""
+        delay = min(
+            backoff_seconds(
+                error, attempt, self.manager.settings.provider_retry_base_delay_seconds
+            ),
+            max(0.0, self.manager.remaining_run_seconds(run_id) - 1),
+        )
+        if delay <= 0:
+            return
+        try:
+            await asyncio.wait_for(
+                self.manager.cancel_signals[run_id].wait(), timeout=delay
+            )
+        except TimeoutError:
+            return
+        raise WorkflowCancelled
 
     async def _generator_node(self, graph_state: WorkflowState) -> dict[str, Any]:
         run_id = graph_state["run_id"]
@@ -239,10 +394,12 @@ class AgentWorkflow:
             event=True,
         )
         plan = state.pending_revision_plan
+        if plan is None and not state.versions and state.seed_revision_plan:
+            plan = state.seed_revision_plan
         attempt = 0
         # Reused across attempts so a failed one can still report what it spent.
         record = _AttemptRecord()
-        while attempt < 2:
+        while True:
             attempt += 1
             record.restart()
             begin_stream = partial(self._begin_stream, attempt=attempt)
@@ -272,7 +429,9 @@ class AgentWorkflow:
                     record,
                 )
                 break
-            except (RetryableProviderError, TimeoutError):
+            except WorkflowCancelled:
+                raise
+            except Exception as exc:
                 # A failed attempt still spent wall-clock time and, when the
                 # provider reported usage before breaking off, tokens. Both are
                 # recorded here: a run that spent 500 seconds and threw two of
@@ -287,34 +446,42 @@ class AgentWorkflow:
                     usage=record.usage,
                 )
                 if record.usage is not None:
-                    # Previously dropped: a truncated attempt's tokens were billed
-                    # by the provider but never reached `total_tokens`, so a run
-                    # that failed on its second attempt under-reported its spend.
                     await self.manager.record_usage(
                         run_id,
                         node="generator",
                         usage=record.usage,
                     )
-                if attempt >= 2:
+                tag(exc, attempt=attempt, version=state.current_iteration)
+                # Only a failure the *same* request can get past is retried. An
+                # output-cap truncation is not one: the identical request needs
+                # the identical length, so it fails here, once, and the user is
+                # offered a compact regeneration instead.
+                if not is_transient(exc) or attempt >= TRANSIENT_ATTEMPTS:
                     raise
                 log_event(
                     LOGGER,
                     "provider_retry",
                     run_id=run_id,
+                    trace_id=state.trace_id,
                     node="generator",
                     attempt=attempt + 1,
+                    reason=type(exc).__name__,
                     provider=type(self.manager.provider_for(run_id)).__name__,
                 )
-        else:
-            raise RetryableProviderError
+                await self._backoff(run_id, exc, attempt)
         await self._check_cancel(run_id)
         elapsed = record.seconds
+        quality = check_prd(
+            content, user_text=_user_text(state), mode=state.generation_mode
+        )
         version = PRDVersion(
             version=state.current_iteration,
             content=content,
             created_at=utc_now(),
             revision_plan=plan,
             token_usage=usage,
+            quality=quality,
+            generation_mode=state.generation_mode,
         )
 
         def finish_generation(snapshot: RunSnapshot) -> None:
@@ -324,6 +491,7 @@ class AgentWorkflow:
             snapshot.current_prd = content
             snapshot.current_prd_attempt = attempt
             snapshot.pending_revision_plan = None
+            snapshot.incomplete_draft = None
             snapshot.node_statuses["generator"] = NodeStatus.SUCCEEDED
             snapshot.active_node = None
 
@@ -335,6 +503,7 @@ class AgentWorkflow:
                 "version": version.version,
                 "attempt": attempt,
                 "content": content,
+                "quality": quality.model_dump(mode="json"),
             },
         )
         await self.manager.record_usage(run_id, node="generator", usage=usage)
@@ -364,32 +533,30 @@ class AgentWorkflow:
         attempt: int,
         record: _AttemptRecord,
     ) -> tuple[str, TokenUsage]:
-        iterator = (
-            self.manager.provider_for(run_id)
-            .stream_prd(
-                user_idea=state.user_idea,
-                target_audience=state.target_audience,
-                user_constraints=state.user_constraints,
-                iteration=state.current_iteration,
-                revision_plan=plan,
-                baseline_prd=self._baseline_prd(state),
-                output_language=state.output_language,
-            )
-            .__aiter__()
-        )
+        provider = self.manager.provider_for(run_id)
+        iterator = provider.stream_prd(
+            user_idea=state.user_idea,
+            target_audience=state.target_audience,
+            user_constraints=state.user_constraints,
+            iteration=state.current_iteration,
+            revision_plan=plan,
+            baseline_prd=self._baseline_prd(state),
+            output_language=state.output_language,
+            **_accepted(provider.stream_prd, generation_mode=state.generation_mode),
+        ).__aiter__()
         content = ""
         buffer = ""
         last_flush = monotonic()
         usage: TokenUsage | None = None
         finish_reason: str | None = None
-        deadline = monotonic() + min(
-            self.manager.settings.generator_timeout_seconds,
-            self.manager.remaining_run_seconds(run_id),
-        )
+        node_budget = self.manager.settings.generator_timeout_seconds
+        run_budget = self.manager.remaining_run_seconds(run_id)
+        run_bound = run_budget < node_budget
+        deadline = monotonic() + min(node_budget, run_budget)
         while True:
             remaining = deadline - monotonic()
             if remaining <= 0:
-                raise TimeoutError
+                raise RunTimeoutError if run_bound else NodeTimeoutError
             try:
                 event = await self._await_provider(
                     run_id,
@@ -422,17 +589,18 @@ class AgentWorkflow:
             LOGGER,
             "generation_finished",
             run_id=run_id,
+            trace_id=state.trace_id,
             node="generator",
             attempt=attempt,
             version=state.current_iteration,
             finish_reason=finish_reason,
             finish_verdict=classify_finish_reason(finish_reason),
             characters=len(content),
+            output_tokens=usage.output_tokens if usage else None,
+            generation_mode=state.generation_mode,
         )
         # Validated before the usage check, so the reader is told why the document
-        # is unusable rather than that the provider forgot to meter it: a
-        # truncated stream that also omits usage is a length problem, and
-        # 「模型服务暂时不可用」 would send them to retry an identical request.
+        # is unusable rather than that the provider forgot to meter it.
         validated = validate_generated_prd(content, finish_reason)
         if usage is None:
             raise RetryableProviderError("Provider omitted token usage")
@@ -444,15 +612,26 @@ class AgentWorkflow:
 
         The best version so far, not the latest: when a round regresses, the next
         attempt should start from the strongest text the run has produced. On the
-        first iteration there is nothing to edit and the generator writes fresh.
+        first iteration of a fresh run there is nothing to edit; a recovery run
+        that continues from another run's best version edits that seed instead.
         """
         if not state.versions:
-            return None
+            return state.seed_prd
         if state.best_version is not None:
             for version in state.versions:
                 if version.version == state.best_version:
                     return version.content
         return state.versions[-1].content
+
+    @staticmethod
+    def _baseline_version(state: RunSnapshot) -> PRDVersion | None:
+        if not state.versions:
+            return None
+        if state.best_version is not None:
+            for version in state.versions:
+                if version.version == state.best_version:
+                    return version
+        return state.versions[-1]
 
     async def _commit_delta(
         self,
@@ -500,6 +679,22 @@ class AgentWorkflow:
         await self._reviewer_node(graph_state["run_id"], ReviewRole.BIZ)
         return {}
 
+    @staticmethod
+    def _previous_evaluation(
+        state: RunSnapshot,
+    ) -> tuple[EvaluationResult | None, RevisionPlan | None]:
+        """The evaluation the current version's plan was built from, and that plan."""
+        if not state.versions:
+            return None, None
+        current = state.versions[-1]
+        plan = current.revision_plan
+        if plan is None:
+            return None, None
+        for version in state.versions:
+            if version.version == plan.iteration and version.evaluation is not None:
+                return version.evaluation, plan
+        return None, plan
+
     async def _reviewer_node(self, run_id: UUID, role: ReviewRole) -> None:
         await self._check_cancel(run_id)
         node = f"{role.value}_reviewer"
@@ -512,29 +707,49 @@ class AgentWorkflow:
             role=role.value,
         )
         state = await self.manager.get_run(run_id)
+        previous, plan = self._previous_evaluation(state)
+        previous_findings = [
+            _finding_payload(item)
+            for item in (previous.combined_feedback if previous else [])
+            if item.finding_id is not None
+            and (role in item.source_roles or item.source_role is role)
+        ]
+        context = ReviewContext(
+            requirements=_requirements(state),
+            automated_checks=_automated_checks(
+                state.versions[-1].quality if state.versions else None
+            ),
+            previous_findings=previous_findings,
+        )
 
         async def call() -> ProviderStructuredResult:
-            return await self.manager.provider_for(run_id).generate_review(
+            provider = self.manager.provider_for(run_id)
+            return await provider.generate_review(
                 role=role,
                 prd=state.current_prd,
                 iteration=state.current_iteration,
                 output_language=state.output_language,
+                **_accepted(provider.generate_review, context=context),
             )
 
-        result, review = await self._validated_structured(
+        result, output, attempts = await self._validated_structured(
             run_id,
             call=call,
-            model=RoleReview,
+            model=ReviewerOutput,
             kind="review",
             role=role,
             timeout_seconds=self.manager.settings.reviewer_timeout_seconds,
             output_language=state.output_language,
         )
-        if review.role is not role:
-            raise ValidationError.from_exception_data(
-                "RoleReview",
-                [],
-            )
+        if output.role is not role:
+            raise ValidationError.from_exception_data("ReviewerOutput", [])
+        review = normalize_review(
+            output,
+            version=state.current_iteration,
+            previous_finding_ids=[
+                str(item["finding_id"]) for item in previous_findings
+            ],
+        )
         await self._check_cancel(run_id)
 
         def finish_review(snapshot: RunSnapshot) -> None:
@@ -556,7 +771,7 @@ class AgentWorkflow:
             run_id,
             node=node,
             version=state.current_iteration,
-            attempt=1,
+            attempt=attempts,
             seconds=monotonic() - started,
             succeeded=True,
             usage=result.usage,
@@ -572,9 +787,16 @@ class AgentWorkflow:
         role: ReviewRole | None,
         timeout_seconds: float,
         output_language: str,
-    ) -> tuple[ProviderStructuredResult, T]:
+    ) -> tuple[ProviderStructuredResult, T, int]:
+        """Call, retry transient failures with backoff, repair invalid output once.
+
+        Returns the result, the parsed value, and how many calls were made. A
+        second invalid answer is final: one repair is the whole budget.
+        """
         result: ProviderStructuredResult | None = None
-        for attempt in range(2):
+        attempt = 0
+        while True:
+            attempt += 1
             try:
                 result = await self._await_provider(
                     run_id,
@@ -582,8 +804,11 @@ class AgentWorkflow:
                     node_timeout=timeout_seconds,
                 )
                 break
-            except (RetryableProviderError, TimeoutError):
-                if attempt == 1:
+            except WorkflowCancelled:
+                raise
+            except Exception as exc:
+                tag(exc, attempt=attempt)
+                if not is_transient(exc) or attempt >= TRANSIENT_ATTEMPTS:
                     raise
                 log_event(
                     LOGGER,
@@ -591,14 +816,25 @@ class AgentWorkflow:
                     run_id=run_id,
                     node=kind,
                     role=role,
-                    attempt=attempt + 2,
+                    attempt=attempt + 1,
+                    reason=type(exc).__name__,
                     provider=type(self.manager.provider_for(run_id)).__name__,
                 )
+                await self._backoff(run_id, exc, attempt)
         assert result is not None
         try:
             parsed = model.model_validate(result.value)  # type: ignore[attr-defined]
-            return result, parsed
+            return result, parsed, attempt
         except ValidationError as exc:
+            log_event(
+                LOGGER,
+                "structured_output_repair",
+                level=logging.WARNING,
+                run_id=run_id,
+                node=kind,
+                role=role,
+                errors=exc.error_count(),
+            )
             repaired = await self._await_provider(
                 run_id,
                 self.manager.provider_for(run_id).repair_structured(
@@ -610,14 +846,18 @@ class AgentWorkflow:
                 ),
                 node_timeout=timeout_seconds,
             )
-            parsed = model.model_validate(repaired.value)  # type: ignore[attr-defined]
+            try:
+                parsed = model.model_validate(repaired.value)  # type: ignore[attr-defined]
+            except ValidationError as repair_error:
+                tag(repair_error, attempt=attempt + 1)
+                raise
             combined_usage = TokenUsage(
                 input_tokens=result.usage.input_tokens + repaired.usage.input_tokens,
                 output_tokens=result.usage.output_tokens + repaired.usage.output_tokens,
                 total_tokens=result.usage.total_tokens + repaired.usage.total_tokens,
             )
             repaired.usage = combined_usage
-            return repaired, parsed
+            return repaired, parsed, attempt + 1
 
     async def _aggregator_node(self, graph_state: WorkflowState) -> dict[str, Any]:
         run_id = graph_state["run_id"]
@@ -635,16 +875,16 @@ class AgentWorkflow:
         tech = state.reviews[ReviewRole.TECH]
         ux = state.reviews[ReviewRole.UX]
         biz = state.reviews[ReviewRole.BIZ]
-        evaluation = EvaluationResult(
-            tech=tech,
-            ux=ux,
-            biz=biz,
-            overall_score=round((tech.score + ux.score + biz.score) / 3, 1),
-            combined_feedback=[
-                *tech.feedback,
-                *ux.feedback,
-                *biz.feedback,
-            ],
+        previous, previous_plan = self._previous_evaluation(state)
+        # Scores, dedup, the gate and the resolution of earlier findings are all
+        # computed here, deterministically, from what the reviewers returned.
+        evaluation, gate = build_evaluation(
+            tech,
+            ux,
+            biz,
+            quality_threshold=state.quality_threshold,
+            previous=previous,
+            previous_plan=previous_plan,
         )
 
         previous_best = state.best_score
@@ -652,14 +892,10 @@ class AgentWorkflow:
         best_score = evaluation.overall_score if improved else previous_best
         best_version = state.current_iteration if improved else state.best_version
 
-        # The quality gate is a conjunction: a score target is an early-stop
-        # goal, and blocking findings are a correctness floor. Reaching the
-        # score while a reviewer still says a core flow cannot be built is not
-        # a finished document, so both halves must hold before a run completes.
         severity_counts = evaluation.severity_counts()
-        must_fix_count = severity_counts[FeedbackSeverity.MUST_FIX.value]
-        threshold_met = evaluation.overall_score >= state.quality_threshold
-        gate_passed = threshold_met and must_fix_count == 0
+        must_fix_count = gate.must_fix_count
+        threshold_met = gate.threshold_met
+        gate_passed = gate.passed
 
         def aggregate(snapshot: RunSnapshot) -> None:
             snapshot.latest_evaluation = evaluation
@@ -690,13 +926,23 @@ class AgentWorkflow:
                 ),
                 "best_version": best_version,
                 "best_score": best_score,
-                # Open findings by tier for the version just scored. The client
-                # shows these next to the score so "target reached" and "one
-                # blocker still open" can be read at the same time.
                 "must_fix_count": must_fix_count,
-                "should_fix_count": severity_counts[FeedbackSeverity.SHOULD_FIX.value],
-                "optional_count": severity_counts[FeedbackSeverity.OPTIONAL.value],
+                "should_fix_count": severity_counts["should_fix"],
+                "optional_count": severity_counts["optional"],
                 "quality_gate_passed": gate_passed,
+                "gate_status": gate.status.value,
+                "findings_before_dedup": evaluation.findings_before_dedup,
+                "findings_after_dedup": len(evaluation.combined_feedback),
+                "rubric_version": evaluation.rubric_version,
+                "scoring_version": evaluation.scoring_version,
+                "combined_feedback": [
+                    item.model_dump(mode="json")
+                    for item in evaluation.combined_feedback
+                ],
+                "finding_resolutions": [
+                    item.model_dump(mode="json")
+                    for item in evaluation.finding_resolutions
+                ],
             },
         )
         outcome = {
@@ -713,9 +959,10 @@ class AgentWorkflow:
             # run that ran out of budget with blockers open must not be
             # presented as having met its quality goal.
             "quality_gate_passed": gate_passed,
-            "must_fix_count": severity_counts[FeedbackSeverity.MUST_FIX.value],
-            "should_fix_count": severity_counts[FeedbackSeverity.SHOULD_FIX.value],
-            "optional_count": severity_counts[FeedbackSeverity.OPTIONAL.value],
+            "gate_status": gate.status.value,
+            "must_fix_count": must_fix_count,
+            "should_fix_count": severity_counts["should_fix"],
+            "optional_count": severity_counts["optional"],
         }
         if gate_passed:
             await self.manager.transition(
@@ -751,6 +998,41 @@ class AgentWorkflow:
         state = await self.manager.get_run(graph_state["run_id"])
         return "end" if state.status in TERMINAL_RUN_STATUSES else "optimizer"
 
+    def _optimizer_context(
+        self, state: RunSnapshot, evaluation: EvaluationResult
+    ) -> OptimizerContext:
+        baseline = self._baseline_version(state)
+        prd = baseline.content if baseline else state.current_prd
+        excerpt = False
+        if len(prd) > OPTIMIZER_FULL_PRD_CHARACTERS:
+            # Too long to send whole: the outline shows every chapter, and the
+            # sections the findings name come through in full, so the optimizer
+            # still sees every place a changed rule might also be stated.
+            sections = [
+                item.section for item in evaluation.combined_feedback if item.section
+            ]
+            prd = (
+                "OUTLINE\n"
+                + "\n".join(outline(prd))
+                + "\n\nRELEVANT SECTIONS\n"
+                + sections_matching(prd, sections)
+            )[:OPTIMIZER_FULL_PRD_CHARACTERS]
+            excerpt = True
+        return OptimizerContext(
+            requirements=_requirements(state),
+            prd=prd,
+            prd_is_excerpt=excerpt,
+            reviewed_version=state.current_iteration,
+            baseline_version=baseline.version if baseline else state.current_iteration,
+            findings=[_finding_payload(item) for item in evaluation.combined_feedback],
+            role_scores={
+                "tech": evaluation.tech.score,
+                "ux": evaluation.ux.score,
+                "biz": evaluation.biz.score,
+            },
+            quality_report=_quality_summary(baseline.quality if baseline else None),
+        )
+
     async def _optimizer_node(self, graph_state: WorkflowState) -> dict[str, Any]:
         run_id = graph_state["run_id"]
         await self._check_cancel(run_id)
@@ -775,26 +1057,35 @@ class AgentWorkflow:
             event=True,
         )
         state = await self.manager.get_run(run_id)
-        if state.latest_evaluation is None:
+        evaluation = state.latest_evaluation
+        if evaluation is None:
             raise ValueError("Optimizer requires an evaluation")
+        context = self._optimizer_context(state, evaluation)
 
         async def call() -> ProviderStructuredResult:
-            assert state.latest_evaluation is not None
-            return await self.manager.provider_for(run_id).generate_revision_plan(
-                evaluation=state.latest_evaluation,
+            provider = self.manager.provider_for(run_id)
+            return await provider.generate_revision_plan(
+                evaluation=evaluation,
                 iteration=state.current_iteration,
                 user_override=state.pending_user_override,
                 output_language=state.output_language,
+                **_accepted(provider.generate_revision_plan, context=context),
             )
 
-        result, plan = await self._validated_structured(
+        result, output, attempts = await self._validated_structured(
             run_id,
             call=call,
-            model=RevisionPlan,
+            model=OptimizerOutput,
             kind="revision_plan",
             role=None,
             timeout_seconds=self.manager.settings.optimizer_timeout_seconds,
             output_language=state.output_language,
+        )
+        plan = build_revision_plan(
+            output,
+            iteration=state.current_iteration,
+            findings=evaluation.combined_feedback,
+            user_override=state.pending_user_override,
         )
         await self._check_cancel(run_id)
 
@@ -819,10 +1110,18 @@ class AgentWorkflow:
             run_id,
             node="optimizer",
             version=state.current_iteration,
-            attempt=1,
+            attempt=attempts,
             seconds=monotonic() - started,
             succeeded=True,
             usage=result.usage,
         )
         await self.manager.set_stage(run_id, RunStatus.GENERATING)
         return {}
+
+
+def _text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _number(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None

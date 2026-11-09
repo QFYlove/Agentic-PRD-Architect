@@ -1,0 +1,110 @@
+# PRD Quality Benchmark - Pilot configuration (P0 draft, not yet frozen).
+# Contains no secrets. The API key is read from the process environment at run
+# time (env var name only, below); .env is never read by the benchmark.
+
+benchmark: prd-quality
+config_version: pilot-v0.1
+status: draft # draft | frozen
+
+approvals:
+  # Nothing below may run until the corresponding entry is set to "approved"
+  # by the operator AND the CLI is invoked with --confirm-spend.
+  real_model_calls: not_approved
+  judge_calls: not_approved
+  other_keyed_calls: not_approved # includes the unbilled GET /models
+  # Batch-wide caps over DeepSeek + Claude Judge (estimated from verified price
+  # snapshots, worst case reserved before each call). Proposed for the P07
+  # smoke test: 300000 tokens and 5.00 USD. Left null until approved.
+  token_budget_limit: null
+  usd_budget_limit: null
+
+model:
+  provider_id: deepseek
+  base_url: https://api.deepseek.com
+  model_id: deepseek-flash
+  model_id_is_floating_alias: true
+  # DeepSeek publishes no dated, pinned model id. The snapshot behind
+  # deepseek-flash can change without notice, so every call records the raw
+  # response.model (see experiment-protocol.md section 5).
+  record_response_model: required
+  api_key_env: DEEPSEEK_API_KEY
+  max_output_tokens: 16000
+  request_timeout_seconds: 90
+  thinking: disabled # hardcoded by the product (backend/main.py:145)
+  temperature: null # not sent by the product; provider default applies
+  seed: null # not supported by the product
+
+conditions:
+  A:
+    description: single-agent one-shot generation (same call as workflow v1)
+    generator_call: stream_prd(iteration=1, revision_plan=None, baseline_prd=None)
+    max_attempts: 2
+    attempt_timeout_seconds: 240
+  B:
+    description: full multi-agent workflow, product defaults
+    quality_threshold: 85
+    max_iterations: 3
+    timeouts_seconds:
+      generator: 240
+      reviewer: 45
+      optimizer: 60
+      run: 600
+    wait_for_completion_seconds: 660
+    primary_result: best_version
+    also_report: [last_version, v1]
+
+output_language: zh
+
+execution:
+  concurrency: 1
+  case_order: by_id
+  condition_order: randomized_per_case
+  condition_order_seed: null # fixed before the first approved batch
+  same_pricing_window_per_case: true
+
+pricing:
+  # Dated snapshots of official price pages (price_snapshots/). Drafts exist;
+  # a person must verify them (status: verified) before any approved run.
+  generator_snapshot: price_snapshots/2026-10-27-deepseek-flash.yaml
+  judge_snapshot: null # set once the judge model is chosen
+  input_token_estimator: utf8_bytes
+
+judge:
+  status: deferred
+  # claude_code_cli: automatic, budget-guarded; needs an explicit API key.
+  # manual_ide: a person runs each task in a fresh, isolated Claude Code
+  # session (manual-judge-runbook.md). Either needs judge_calls: approved.
+  runner: claude_code_cli
+  model_id: null # decided by a person; see p3-readiness.md section 1
+  candidate_model_id: claude-opus-5-5 # recommendation only
+  second_model_id: null
+  passes_per_document: 2
+  shuffle_items_on_second_pass: true
+  stop_mode: smoke # smoke: stop on first invalid output; pilot: >25% of >=4
+  claude_code:
+    cli_path: claude
+    cli_version: null # pin the exact `claude --version` when approving
+    effort: high
+    max_output_tokens: 32000
+    max_api_requests_per_call: 3 # reservation multiplier, see guard.py
+    timeout_seconds: 600
+    per_call_soft_budget_usd: null # passed as --max-budget-usd; soft only
+    allow_gateway: false # gateway needs an API key + verified gateway_per_token snapshot
+
+scoring:
+  rubric_version: rubric-v0.4
+  pass_threshold: 70 # provisional auxiliary metric only, see rubric.md section 6.4
+  tie_band_points: 2 # |delta| < 2 counts as "tie" in direction counts only
+  human_sample_fraction: 0.25
+
+open_decisions:
+  - id: D1
+    question: Judge model(s); recommended non-DeepSeek family
+  - id: D2
+    question: Dedicated API key for billing reconciliation
+  - id: D3
+    question: Whether raw outputs under runs/ are committed to Git
+  - id: D4
+    question: Who reviews cases before freezing, and who does human scoring
+  - id: D5
+    question: Token budget cap for the smoke test and the Pilot

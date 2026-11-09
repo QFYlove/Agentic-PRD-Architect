@@ -1,0 +1,341 @@
+id: PQB-P07
+title: 招聘系统候选人档案的权限与数据保留
+category: permission_retention # 权限与数据保留
+case_version: v0.3 # v0.3: rule_relations split into explicit/derived/design_choice; H9 removed
+status: frozen # single-case freeze, see cases/freeze/PQB-P07.yaml
+
+frozen_input:
+  user_idea: |-
+    为公司内部招聘系统设计"候选人档案"模块。HR 可以创建候选人档案、上传简历、记录面试评价。用人经理可以查看本部门职位的候选人。面试官只能查看被分配给自己面试的候选人，只能填写和查看自己的面试评价，在面试结束后才能看到其他面试官的评价。候选人可以通过邮件中的链接申请查看或删除自己的个人数据。
+  target_audience: |-
+    HR、HR 主管、用人经理、面试官、法务、候选人、系统管理员。
+  user_constraints: |-
+    未录用候选人的数据在流程结束后保留 180 天，到期自动删除或匿名化，除非候选人同意加入人才库；人才库同意有效期 2 年，候选人可随时撤回。已录用者的档案转入员工系统后，招聘系统内再保留 30 天。法务可以对特定档案设置"诉讼保全"，保全期间不得删除。所有档案的查看、导出、删除操作都要写入审计日志，审计日志保留 3 年。导出简历需要 HR 主管审批。系统管理员可以配置权限，但不能查看简历内容。
+
+evaluator_context: |-
+  考察权限范围与时序性权限，以及多条数据保留、删除、保全、审计规则之间的关系。
+  题面有意留下的空白：删除和匿名化如何选择、面试结束的含义、流程结束的认定时点、
+  候选人请求的身份验证与处理时限、适用法规。
+  P0 一致性修订：v0 题面只写"保留 180 天"，没有起算点；已补充"在流程结束后"，"流程结束"的认定时点保留为 C4。
+  v0.2 修订：题面角色清单补充"法务"；核心项从 8 个减为 5 个。
+  v0.3 修订：
+  - rule_relations 分为 explicit / derived / design_choice，每条附原文依据、推导理由、可接受方案与待澄清事项。
+    只有 explicit 关系可引用 H 条目；derived 关系只用于解释判定，不是硬约束。
+  - 删除了 v0.2 中"人才库同意最长 2 年"的推断：题面只规定同意有效期为 2 年，没有禁止续期。
+  - 撤回同意后的处理、保全是否阻止匿名化、保全超过 3 年时的审计日志、已录用者删除请求的范围，均列为待澄清（C7–C11）。
+  - H9（用人经理"只能"查看本部门）移出 H：题面是授权表述，最小权限属于推导，由 R3 检查。
+
+# Every H quote appears verbatim in frozen_input.
+hard_constraints:
+  - id: H1
+    text: 未录用候选人的数据在流程结束后保留 180 天，到期自动删除或匿名化，除非候选人同意加入人才库
+    quote: 未录用候选人的数据在流程结束后保留 180 天，到期自动删除或匿名化，除非候选人同意加入人才库
+  - id: H2
+    text: 人才库同意有效期 2 年，候选人可随时撤回
+    quote: 人才库同意有效期 2 年，候选人可随时撤回
+    note: 题面没有规定撤回或到期后的数据处理，也没有规定能否续期；对这两点的任何明确处理都不违反 H2
+  - id: H3
+    text: 已录用者的档案转入员工系统后，招聘系统内再保留 30 天
+    quote: 已录用者的档案转入员工系统后，招聘系统内再保留 30 天
+  - id: H4
+    text: 法务可以对特定档案设置"诉讼保全"，保全期间不得删除
+    quote: 法务可以对特定档案设置"诉讼保全"，保全期间不得删除
+    note: 只禁止删除。查看、导出、审计、撤回登记、受理请求等其他处理不受 H4 限制；保全是否同时阻止匿名化是待澄清事项（C8）
+  - id: H5
+    text: 所有档案的查看、导出、删除操作都要写入审计日志，审计日志保留 3 年
+    quote: 所有档案的查看、导出、删除操作都要写入审计日志，审计日志保留 3 年
+  - id: H6
+    text: 导出简历需要 HR 主管审批
+    quote: 导出简历需要 HR 主管审批
+  - id: H7
+    text: 系统管理员可以配置权限，但不能查看简历内容
+    quote: 系统管理员可以配置权限，但不能查看简历内容
+  - id: H8
+    text: 面试官只能查看被分配给自己面试的候选人，只能填写和查看自己的面试评价，在面试结束后才能看到其他面试官的评价
+    quote: 面试官只能查看被分配给自己面试的候选人，只能填写和查看自己的面试评价，在面试结束后才能看到其他面试官的评价
+
+# How the rules interact.
+# - explicit: stated in the input; may cite H ids.
+# - derived: follows from explicit rules; explains verdicts but is never a hard
+#   constraint and never triggers an automatic hard-constraint candidate.
+# - design_choice: left open; every listed alternative, and any other stated,
+#   reasonable one, is acceptable. Never graded as having a single answer.
+rule_relations:
+  - id: L1
+    kind: explicit
+    text: 保全期间不得删除被保全的档案
+    source_quotes: [保全期间不得删除]
+    constraints: [H4]
+    reasoning: 题面原文，没有例外
+    alternatives: []
+    open_questions: [保全是否同时阻止匿名化（C8）]
+  - id: L2
+    kind: derived
+    text: 保全阻断所有删除路径：180 天到期、录用后 30 天清理、候选人的删除请求，以及撤回人才库同意后若选择删除
+    source_quotes:
+      - 保全期间不得删除
+      - 到期自动删除或匿名化
+      - 候选人可以通过邮件中的链接申请查看或删除自己的个人数据
+      - 招聘系统内再保留 30 天
+    reasoning: L1 没有例外，因此适用于每一条删除路径。只限制删除，不扩展为停止查看、审计、受理请求等其他处理
+    alternatives: [暂停清理任务, 删除请求挂起并告知候选人原因, 标记延期并在保全解除后处理]
+    open_questions: [保全期间如何答复候选人的删除请求]
+  - id: L3
+    kind: explicit
+    text: 已同意加入人才库的未录用候选人，其数据不适用 180 天到期处理
+    source_quotes: [到期自动删除或匿名化，除非候选人同意加入人才库]
+    constraints: [H1]
+    reasoning: 题面原文以"除非"给出例外
+    alternatives: []
+    open_questions: []
+  - id: L4
+    kind: explicit
+    text: 人才库同意有效期 2 年，候选人可随时撤回
+    source_quotes: [人才库同意有效期 2 年，候选人可随时撤回]
+    constraints: [H2]
+    reasoning: 题面原文。只规定了同意的有效期和撤回权，没有规定能否续期，也没有规定撤回或到期后的数据处理
+    alternatives: []
+    open_questions: [同意到期前能否重新征得同意或续期（C11）]
+  - id: L5
+    kind: derived
+    text: 人才库同意撤回或到期后，L3 的例外不再适用
+    source_quotes: [除非候选人同意加入人才库, 候选人可随时撤回]
+    reasoning: 例外以有效的同意为前提，同意失效即不再构成例外。本关系不规定此后数据应如何处理（见 L6）
+    alternatives: []
+    open_questions: [例外失效后适用什么处理，见 L6]
+  - id: L6
+    kind: design_choice
+    text: 人才库同意撤回或到期后的数据处理
+    reasoning: 题面没有规定。不能把撤回解释为必须立即删除
+    alternatives:
+      - 立即删除或匿名化
+      - 回到 180 天规则（自行规定起算点，例如自撤回或到期时起算，或自原流程结束时起算）
+      - 立即停止人才库用途，在下一个清理周期处理
+      - 其他写明的、不依据已失效同意无限期保留的方案
+    open_questions: [起算点, 撤回时若已超过原 180 天如何处理（C7）]
+  - id: L7
+    kind: explicit
+    text: 档案的删除操作写入审计日志，审计日志保留 3 年
+    source_quotes: [所有档案的查看、导出、删除操作都要写入审计日志，审计日志保留 3 年]
+    constraints: [H5]
+    reasoning: 题面原文
+    alternatives: []
+    open_questions: []
+  - id: L8
+    kind: derived
+    text: 删除或匿名化档案时不应一并删除对应的审计日志
+    source_quotes: [删除操作都要写入审计日志, 审计日志保留 3 年]
+    reasoning: 删除操作本身必须留痕，日志保留期不以档案存续为条件。本关系不要求日志保留完整的个人信息
+    alternatives: []
+    open_questions: [日志中候选人身份的表示方式，见 L9]
+  - id: L9
+    kind: design_choice
+    text: 审计日志中如何表示已删除或匿名化候选人的身份
+    reasoning: 题面同时规定了删除申请权与 3 年日志保留，没有规定日志中的身份信息，适用法规也未确定（C3）
+    alternatives: [假名化 ID, 最小必要字段, 加密隔离并限制访问, 法规允许时原样保留并限制访问]
+    open_questions: [适用法规是否允许日志保留个人信息（C3）]
+  - id: L10
+    kind: design_choice
+    text: 候选人的删除请求能否早于 180 天到期执行，以及处理时限
+    source_quotes: []
+    reasoning: 题面写的是"申请"删除，没有规定审核方式与时限；受保全（L1）约束，时限受适用法规影响（C3）
+    alternatives: [审核后执行, 提前执行, 依法或因保全拒绝并说明理由]
+    open_questions: [法定处理时限（C3）]
+  - id: L11
+    kind: design_choice
+    text: 已录用者的删除请求范围（招聘系统内 30 天保留期内的副本与员工系统中的数据）
+    reasoning: 题面没有规定删除请求与录用、员工系统之间的边界
+    alternatives: [只处理招聘系统内的副本并告知员工系统另行处理, 转交员工系统负责方, 列为待法务确认]
+    open_questions: [删除请求是否及于已转入员工系统的数据（C10）]
+  - id: L12
+    kind: design_choice
+    text: 保全是否同时阻止匿名化
+    reasoning: 题面只写"不得删除"，而 180 天规则中删除与匿名化并列。既不能推定为一律禁止，也不能推定为一律允许
+    alternatives: [保全同时阻止匿名化以保持证据完整, 保全只阻止删除、允许匿名化, 列为待法务确认]
+    open_questions: [由法务确认（C8）]
+  - id: L13
+    kind: design_choice
+    text: 保全期超过 3 年时，相关审计日志是否延长保留
+    reasoning: 题面只规定日志保留 3 年，没有规定与保全的关系
+    alternatives: [随保全延长保留, 按 3 年到期处理, 列为待法务确认]
+    open_questions: [由法务确认（C9）]
+  - id: L14
+    kind: design_choice
+    text: 保全解除后，已超过保留期的数据如何处理
+    reasoning: 题面没有规定
+    alternatives: [立即删除或匿名化, 进入下一个清理周期, 重新计算保留期, 人工复核后处理]
+    open_questions: [保全解除由谁触发后续处理]
+  - id: L15
+    kind: explicit
+    text: 系统管理员的权限配置能力不包含查看简历内容
+    source_quotes: [系统管理员可以配置权限，但不能查看简历内容]
+    constraints: [H7]
+    reasoning: 题面原文。防止管理员给自己授权属于推导要求，由 R4 检查，不并入本关系
+    alternatives: []
+    open_questions: [「简历内容」是否包括面试评价等其他档案内容]
+
+required_items:
+  - id: R1
+    text: 各角色的权限范围：七类角色分别能对哪些候选人数据执行哪些操作（查看、编辑、评价、导出、删除、设置保全、配置权限）
+    source: ED
+    core: true
+    impact: 角色权限散落在描述中而没有完整定义时，实现方会遗漏范围限制（如面试官的分配范围），直接造成越权访问
+    rationale: 题面给出了部分角色的权限；HR、HR 主管、法务、候选人的完整范围需要汇总定义
+    check: 七类角色都有权限范围；以表格、矩阵或分段文字表达均可；缺一个角色为 partial
+  - id: R2
+    text: 面试官评价的可见性时序：面试结束前只能看自己的评价，结束后可看他人评价
+    source: E
+    core: true
+    impact: 时序规则缺失时，面试官可能在打分前看到他人评价，评价独立性被破坏（违反 H8）
+    check: 时序规则正确即可；「面试结束」的具体认定由 C2 单独检查，不在此扣分
+  - id: R3
+    text: 用人经理的可见范围：可以查看本部门职位的候选人；是否限于本部门，以及职位转移部门或经理调岗后的范围变化
+    source: ED
+    core: false
+    rationale: 题面以授权方式写明用人经理可以查看本部门职位的候选人，没有写"只能"。限定为本部门属于最小权限推导，不是硬约束（v0.3 由 H9 降级）
+    check: 写明用人经理可查看本部门职位候选人，并说明范围是否限于本部门及变更场景的处理；只写授权、不说明范围边界与变更为 partial。允许跨部门查看但给出理由的不判 contradicted
+  - id: R4
+    text: 系统管理员可配置权限但不能查看简历内容，并防止管理员给自己授予内容查看权限
+    source: ED
+    core: true
+    impact: 管理员能直接或通过自我授权看到简历，题面明确的职责分离失效（违反 H7）
+    rationale: 禁止查看是题面给定的；可配置权限意味着存在自我授权的绕过路径
+    check: 只写禁止查看为 partial；同时处理自我授权为 covered
+  - id: R5
+    text: 导出简历需 HR 主管审批，导出行为写入审计
+    source: E
+    core: false
+    check: 审批流程与审计都有
+  - id: R6
+    text: 保留期限：未录用者流程结束后 180 天到期自动删除或匿名化；已录用者转入员工系统后 30 天
+    source: E
+    core: true
+    impact: 保留期限缺失或错误时，数据会超期保留或被提前删除，两者都是合规问题（违反 H1、H3）
+    check: 两个期限及其起算点、自动执行都正确；缺一个期限为 partial
+  - id: R7
+    text: 人才库：同意的获取方式、2 年有效期、随时撤回、撤回或到期后数据的处理
+    source: ED
+    core: false
+    rationale: 有效期和撤回是题面给定的；获取方式、续期和撤回或到期后的处理题面未给（见 L4、L6）
+    check: 有效期与撤回权正确；撤回或到期后的处理采用 L6 中任一方式或其他写明的方案，或列为待确认，均可。只要求不依据已失效的同意无限期保留
+  - id: R8
+    text: 诉讼保全阻断所有删除路径（到期删除、录用后清理、候选人删除请求、撤回同意后选择删除的情形），以及保全解除后的处理
+    source: ED
+    core: true
+    impact: 任一删除路径绕过保全都会在诉讼期间销毁证据（违反 H4），属于不可逆的法律风险
+    rationale: 保全期间不得删除是题面给定的（L1）；它对各删除路径的适用是推导（L2）；解除后的处理是设计选择（L14）
+    check: 写明保全阻断删除为 covered 的必要条件；只写"保全期间不自动删除"而未覆盖候选人删除请求为 partial；解除后的处理方式不限，可标为假设。保全期间仍允许查看、审计、受理请求不扣分
+  - id: R9
+    text: 候选人数据请求：邮件链接的身份验证、查看与删除的处理流程和时限
+    source: ED
+    core: false
+    rationale: 邮件链接可能被转发或泄露，不验证身份会导致数据泄露或恶意删除；完全无验证的情况由 P07-X4 覆盖
+    check: 有身份验证措施与处理流程；时限可列为待确认（见 C3）
+  - id: R10
+    text: 审计日志与档案删除的关系：删除档案不删除审计日志；日志中如何表示已删除候选人
+    source: D
+    core: false
+    rationale: 删除不影响日志属于推导（L8）；日志中的身份表示是设计选择（L9）
+    check: 写明删除不影响审计日志为 covered 的必要条件；身份表示方式不限，可标为待确认
+  - id: R11
+    text: 审计日志的内容与范围：查看、导出、删除，记录操作人、时间、对象、结果
+    source: E
+    core: false
+    check: 三类操作都覆盖，字段具体
+  - id: R12
+    text: 备份中的数据在删除或匿名化后的处理
+    source: D
+    core: false
+    rationale: 只删除主库而备份保留会使删除承诺失效
+    check: 给出处理或列为待确认
+  - id: R13
+    text: 权限变更、面试分配取消、职位关闭后访问权限即时失效
+    source: D
+    core: false
+    rationale: 权限依赖分配关系，关系变化后旧权限残留是常见越权来源
+    check: 写明失效时机
+
+clarifications:
+  - id: C1
+    question: 到期时删除还是匿名化，二者的选择标准；匿名化后保留哪些字段
+    core: true
+    impact: 题面允许两种处理，实现方各自选择会导致同类数据去向不一致，匿名化不彻底时仍可识别个人
+    accept: 提出问题，或给出选择标准并标注为假设
+    not_counted: 只复述"删除或匿名化"
+  - id: C2
+    question: 「面试结束」指本轮面试结束、该面试官提交评价后，还是全部面试轮次结束
+    core: false
+    accept: 提出问题，或明确定义并标注为假设
+  - id: C3
+    question: 适用的个人信息保护法规及其对数据请求处理时限、删除范围的要求
+    core: true
+    impact: 候选人请求的处理时限和删除范围由法规决定，未确认就设计可能违反法定义务
+    accept: 指出需要法务确认适用法规与法定时限；可给出候选法规但须标为待确认
+  - id: C4
+    question: 「流程结束」的认定时点（发出拒绝通知、候选人拒绝录用、职位关闭等）
+    core: false
+    accept: 提出问题，或给出定义并标注为假设
+  - id: C5
+    question: 用人经理能否查看面试评价，以及在什么时间点可见
+    core: false
+    accept: 同上
+  - id: C6
+    question: HR 是否可以查看所有候选人，还是按负责的职位或部门划分范围
+    core: false
+    accept: 同上
+  - id: C7
+    question: 人才库同意撤回或到期后，数据如何处理、从何时起算
+    core: false
+    accept: 提出问题，或采用 L6 中任一方式并标注为假设
+  - id: C8
+    question: 诉讼保全是否同时阻止匿名化
+    core: false
+    accept: 提出问题，或给出处理并标注为待法务确认
+  - id: C9
+    question: 保全期超过 3 年时，相关审计日志是否延长保留
+    core: false
+    accept: 同上
+  - id: C10
+    question: 已录用者提出删除请求时，范围是否及于已转入员工系统的数据
+    core: false
+    accept: 同上
+  - id: C11
+    question: 人才库同意到期前能否重新征得同意或续期
+    core: false
+    accept: 提出问题，或给出处理并标注为假设
+
+acceptable_assumptions:
+  - 默认匿名化以保留统计数据，候选人主动申请时删除（标注为假设）
+  - 「面试结束」指该面试官本人提交评价之后（标注为假设）
+  - 撤回或到期后采用 L6 中任一方式或其他写明的方案（标注为假设）
+  - 允许在到期前重新征得同意（标注为假设）
+  - 审计日志中候选人以假名化 ID 记录（L9 中任一方式均可）
+  - 数据请求在 15 个工作日内处理（标注为假设并待法务确认）
+  - 保全解除后，已超期数据在下一个清理周期处理（L14 中任一方式均可）
+
+critical_defects:
+  - id: P07-X1
+    condition: 系统管理员可以直接查看简历内容
+  - id: P07-X2
+    condition: 诉讼保全期间，文档明确允许任一删除路径（自动到期、录用后清理、候选人删除请求、撤回同意后删除）删除该档案
+  - id: P07-X3
+    condition: 面试官在面试结束前可以看到其他面试官的评价，或可以查看未分配给自己的候选人
+  - id: P07-X4
+    condition: 候选人通过邮件链接即可直接删除或查看数据，没有任何身份验证
+  - id: P07-X5
+    condition: 任一明确期限（180 天、2 年、30 天、3 年）与题面不符
+  - id: P07-X6
+    condition: 删除或匿名化档案时一并删除其审计日志，或审计日志保留期短于 3 年
+
+judge_notes: |-
+  rule_relations 的用法：
+  - explicit 关系可作为判定依据；违反时引用其 constraints 中的 H 条目。
+  - derived 关系只用于说明判定理由，不能作为 violated_constraint，也不能单独支撑 hard_constraint 类矛盾。
+    文档明确写出违反某条 H 原文的内容时（例如"保全期间受理删除请求后直接删除"），才按违反该 H 处理；
+    只是遗漏某条删除路径的，按 R8 partial 处理。
+  - design_choice 关系有多种可接受答案，任何写明的合理方案（并在需要时标注为假设）都不扣分，不得判 contradicted。
+  - 不得把撤回同意解释为必须立即删除；不得把某种审计日志个人信息方案当作唯一答案；
+    不得把"保全期间不得删除"扩展为停止查看、审计、受理请求等全部处理。
+  C3 只要求指出需要确认适用法规，不要求文档给出正确的法律结论；把某部法规的具体条款当作已确认结论写入并据此设计的，按 G2 考虑。
+  R4 中"防止自我授权"属于推导要求，未处理只判 partial，不构成 P07-X1。
+  用人经理的范围不是 H 条目：写成可跨部门查看时，只在有实质越权风险且未说明理由时按 R3 的一般性矛盾处理。

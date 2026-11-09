@@ -1,0 +1,33 @@
+# Offline calibration fixture. The judge response below is fixed and never
+# comes from a model; expected values were computed by hand from rubric-v0.4.
+id: CAL-01
+title: 语义等价但措辞不同，不得判为矛盾
+case_id: PQB-P03
+covers: [semantic_equivalence]
+document: |-
+  # 采购申请系统 PRD
+  ## 审批路由
+  所有申请先交直属主管；预估金额达到 2 万元（含）时，主管同意后转财务复核；达到 10 万元（含）时，财务同意后再交总经理。
+  ## 询价
+  审批全部完成后由采购专员向不少于三家供应商询价，预估金额不足 5000 元的可直接下单。
+  ## 超时
+  审批人 48 小时未处理时提醒该审批人；72 小时仍未处理时上报给该审批人的上级，不得自动通过。
+responses:
+  # The judge reads "达到 2 万元（含）" as "大于或等于 2 万元": covered, not contradicted.
+  - fill: {verdict: covered, quote: 所有申请先交直属主管}
+    items:
+      R3: {verdict: covered, quote: 预估金额达到 2 万元（含）时，主管同意后转财务复核}
+      R5: {verdict: covered, quote: 向不少于三家供应商询价，预估金额不足 5000 元的可直接下单}
+  - fill: {verdict: covered, quote: 所有申请先交直属主管}
+    items:
+      R3: {verdict: covered, quote: 达到 10 万元（含）时，财务同意后再交总经理}
+reviews:
+  - name: auto
+    expect:
+      status: final
+      final_total: 100
+      base_total: 100
+      correctness_caps: {final: [4, 4]}
+      counts: {unverified_judgments: 0, valid_claims: 0}
+      candidates: []
+      disagreements: []

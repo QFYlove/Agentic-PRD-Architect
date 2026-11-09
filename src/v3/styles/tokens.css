@@ -1,0 +1,52 @@
+/* V4 tokens. One light theme tuned for long reading sessions. */
+:root {
+  /* Surfaces: warm, low-contrast paper. Only two levels. */
+  --bg: #f6f5f1;
+  --surface: #fdfcfa;
+  --hover: #efede7;
+  --select: #e8e5dd;
+
+  /* Ink: near-black, never pure black, to reduce glare. */
+  --ink: #1d1e20;
+  --ink-2: #5d6063;
+  --ink-3: #8c8f91;
+  --line: #e3e1db;
+  --line-2: #cfccc4;
+
+  /* One accent, used for "needs you" and the current place. */
+  --accent: #c8553d;
+  --accent-ink: #a8432e;
+  --accent-soft: #f5e3dc;
+  --mark: #fbeee3;
+
+  --ok: #4c7a5c;
+
+  --font: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", system-ui,
+    sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs: 15px;
+  --fs-read: 16.5px;
+  --fs-lg: 18px;
+  --fs-title: 26px;
+  --fs-hero: 34px;
+
+  --r: 6px;
+  --r-lg: 10px;
+
+  --bar-h: 52px;
+  --tool-h: 48px;
+  --pad: clamp(16px, 4vw, 40px);
+
+  --ease: cubic-bezier(0.25, 0.8, 0.25, 1);
+  --t: 160ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t: 0ms;
+  }
+}

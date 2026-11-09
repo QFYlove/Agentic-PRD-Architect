@@ -1,0 +1,66 @@
+id: CAL-09
+title: P07 规则关系：explicit 可支撑 H 主张，derived 与 design_choice 不能
+case_id: PQB-P07
+covers: [p07_explicit, p07_derived, p07_design_choice, invalid_constraint_ref]
+document: |-
+  # 候选人档案 PRD
+  法务对档案设置诉讼保全后，该档案不进入到期清理。
+  保全期间候选人提交删除请求的，系统核实身份后立即删除档案。
+  候选人撤回人才库同意后，数据回到 180 天规则，从撤回之日起算（假设，待法务确认）。
+  审计日志中候选人以假名化 ID 记录。
+responses:
+  - fill: {verdict: covered, quote: 审计日志中候选人以假名化 ID 记录}
+    items:
+      # explicit L1 / H4: deleting a held record on request violates H4.
+      R8:
+        verdict: partial
+        quote: 法务对档案设置诉讼保全后，该档案不进入到期清理
+        hard_constraint_claim:
+          violated_constraint: H4
+          quotes: [保全期间候选人提交删除请求的，系统核实身份后立即删除档案]
+          behavior_impact: 「保全期间候选人提交删除请求的，系统核实身份后立即删除档案」会在诉讼保全期间删除被保全的档案
+          defect_key: hold-bypassed-by-request
+      # derived L5 cited as if it were a hard constraint: refused as a claim.
+      R7:
+        verdict: covered
+        quote: 候选人撤回人才库同意后，数据回到 180 天规则
+        hard_constraint_claim:
+          violated_constraint: L5
+          quotes: [候选人撤回人才库同意后，数据回到 180 天规则]
+          behavior_impact: 「候选人撤回人才库同意后，数据回到 180 天规则」让撤回后的数据继续保留最长 180 天
+          defect_key: withdrawal-keeps-data
+      # design_choice L6 used as the basis of a general contradiction: refused.
+      C7:
+        verdict: contradicted
+        contradiction_kind: general
+        quote: 从撤回之日起算（假设，待法务确认）
+        behavior_impact: 「从撤回之日起算」使撤回后的数据保留期比自流程结束起算更长
+        defect_key: withdrawal-clock-start
+        rule_basis: [L6]
+      # derived L8 is a valid basis for a general contradiction (non-H).
+      R10:
+        verdict: contradicted
+        contradiction_kind: general
+        quote: 审计日志中候选人以假名化 ID 记录
+        behavior_impact: 「审计日志中候选人以假名化 ID 记录」本身合规，此判定用于检验 derived 关系可作为一般性依据
+        defect_key: audit-log-basis-probe
+        rule_basis: [L8]
+reviews:
+  - name: pending
+    expect:
+      status: pending
+      final_total: null
+      judgments:
+        C7: {verified: false, problem: basis_is_design_choice}
+        R10: {verified: true}
+      invalid_claims:
+        - {item_id: R7, reason: not_explicit_hard_constraint}
+      counts: {valid_claims: 1, invalid_claims: 1}
+      candidates:
+        - {rule_id: G1, violated_constraint: H4, decision: pending}
+      # R weights 18 (13 items, 5 core). Base: R8 partial (core, lose 1),
+      # R10 contradicted (plain, lose 1) -> 16/18 -> 22.2222; one general
+      # (R10) -> cap 3 -> 15; dims 55 -> 92.2222.
+      base_total: 92.2222
+      # H4 confirmed: R8 credit 0 -> 15/18 -> 20.8333; cap 1 -> 5 -> 80.8333.
+      if_confirmed_total: 80.8333

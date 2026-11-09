@@ -22,6 +22,7 @@ def make_settings(**overrides: Any) -> Settings:
         "optimizer_timeout_seconds": 2,
         "event_buffer_size": 100,
         "sse_heartbeat_seconds": 5,
+        "provider_retry_base_delay_seconds": 0,
     }
     defaults.update(overrides)
     return Settings(**defaults)
@@ -84,3 +85,68 @@ def make_sqlite_manager(
     )
     manager.set_workflow(AgentWorkflow(manager))
     return manager
+
+
+def finding(
+    severity: Any,
+    title: str,
+    *,
+    section: str = "5.1 Purchase Flow",
+    category: Any = None,
+    evidence: str | None = None,
+    problem: str | None = None,
+    confidence: float | None = 0.9,
+) -> Any:
+    """A model-shaped finding for test reviewers. Evidence defaults to present."""
+    from backend.schemas import FindingCategory, FindingInput
+
+    return FindingInput(
+        title=title,
+        severity=severity,
+        category=category or FindingCategory.OTHER,
+        section=section,
+        evidence=f"Section {section} does not cover it."
+        if evidence is None
+        else evidence,
+        problem=problem or f"{title}.",
+        user_impact="The affected task cannot be completed reliably.",
+        recommendation="Close the gap in the named section.",
+        confidence=confidence,
+    )
+
+
+def review_value(
+    role: Any,
+    *,
+    score: int,
+    findings: list[Any] | None = None,
+    resolutions: list[Any] | None = None,
+) -> dict[str, Any]:
+    """A ``ReviewerOutput`` value whose backend-computed role score is ``score``."""
+    from backend.providers.mock import mock_review_output
+
+    return mock_review_output(
+        role,
+        score=score,
+        findings=findings or [],
+        resolutions=resolutions,
+    )
+
+
+def role_review(
+    role: Any,
+    *,
+    score: int,
+    findings: list[Any] | None = None,
+    version: int = 1,
+) -> Any:
+    """A stored ``RoleReview`` built the way the workflow builds one."""
+    from backend.schemas import ReviewerOutput
+    from backend.scoring import normalize_review
+
+    return normalize_review(
+        ReviewerOutput.model_validate(
+            review_value(role, score=score, findings=findings)
+        ),
+        version=version,
+    )

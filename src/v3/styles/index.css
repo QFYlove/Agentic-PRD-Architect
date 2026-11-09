@@ -1,0 +1,8 @@
+/* V3 workspace styles. Loaded only by V3Layout; the V2 pages keep global.css. */
+@import "./tokens.css";
+@import "./base.css";
+@import "./app.css";
+@import "./home.css";
+@import "./explore.css";
+@import "./document.css";
+@import "./workspace.css";

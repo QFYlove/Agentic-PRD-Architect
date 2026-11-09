@@ -1,0 +1,604 @@
+/* ---------- Requirement exploration ---------- */
+.explore {
+  --req-w: 400px;
+  min-height: calc(100vh - var(--bar-h));
+}
+
+.explore.has-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--req-w);
+}
+
+.talk {
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 36px var(--pad) 120px;
+}
+
+.talk__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 24px;
+}
+
+.talk__status {
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+
+.talk__actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* Thread: no bubbles. Speaker is a narrow left column, text is set like prose. */
+.thread {
+  display: grid;
+  gap: 28px;
+}
+
+.msg {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 12px;
+  animation: fade 240ms var(--ease);
+}
+
+.msg__who {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--ink-3);
+  padding-top: 3px;
+}
+
+.msg--ai .msg__who {
+  color: var(--ink);
+}
+
+.msg__body {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.msg__text {
+  line-height: 1.75;
+}
+
+.msg--you .msg__text {
+  color: var(--ink-2);
+}
+
+.typing {
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+}
+
+.typing span {
+  animation: blink 1s steps(2) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* The link from an answer to what it changed in the requirements. */
+.trace {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px 3px 0;
+  border-radius: 4px;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  transition: color var(--t) var(--ease);
+}
+
+.trace__line {
+  width: 16px;
+  height: 1px;
+  background: currentColor;
+  transition: width var(--t) var(--ease);
+}
+
+.trace:hover,
+.trace:focus-visible {
+  color: var(--accent-ink);
+}
+
+.trace:hover .trace__line {
+  width: 24px;
+}
+
+/* AI insight: a quiet annotation, expanded only when it needs a decision. */
+.insight {
+  position: relative;
+  border-left: 2px solid var(--line-2);
+  padding: 2px 0 2px 14px;
+}
+
+.insight--conflict,
+.insight--risk {
+  border-left-color: var(--accent);
+}
+
+.insight.is-done {
+  border-left-color: var(--line);
+}
+
+.insight__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 2px 0;
+}
+
+.insight__kind {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+
+.insight--conflict .insight__kind,
+.insight--risk .insight__kind {
+  color: var(--accent-ink);
+}
+
+.insight__title {
+  font-weight: 500;
+  font-size: var(--fs-sm);
+}
+
+.insight.is-done .insight__title {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+.insight__state {
+  margin-left: auto;
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+
+.insight__undo {
+  position: absolute;
+  right: 0;
+  top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  opacity: 0;
+  background: var(--bg);
+  padding: 0 4px;
+}
+
+.insight:hover .insight__undo,
+.insight__undo:focus-visible {
+  opacity: 1;
+}
+
+.insight__body {
+  display: grid;
+  gap: 8px;
+  padding: 6px 0 4px;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  animation: fade 200ms var(--ease);
+}
+
+.insight__suggest span,
+.note__suggest span {
+  display: inline-block;
+  margin-right: 8px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.insight__actions,
+.note__actions,
+.q__actions,
+.irow__actions,
+.irow__edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* Current round: the one raised surface on the page. */
+.answers {
+  margin-top: 32px;
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow:
+    0 0 0 1px var(--line),
+    0 2px 10px rgba(30, 28, 24, 0.05);
+  animation: fade 240ms var(--ease);
+}
+
+.answers__label {
+  padding: 16px 20px 6px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.answers__label span {
+  font-weight: 400;
+  color: var(--ink-3);
+  margin-left: 6px;
+}
+
+.q {
+  border-top: 1px solid var(--line);
+}
+
+.q:first-child {
+  border-top: 0;
+}
+
+.q__head {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 20px;
+}
+
+.q__num {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+
+.q__text {
+  line-height: 1.55;
+}
+
+.q.is-active .q__num {
+  color: var(--accent);
+}
+
+.q.is-active .q__text {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.q.is-handled .q__text {
+  color: var(--ink-2);
+}
+
+.q__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+.q__status .icon {
+  color: var(--ok);
+}
+
+.q__body {
+  display: grid;
+  gap: 10px;
+  padding: 0 20px 16px 52px;
+}
+
+.q__why {
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.q__ref {
+  margin-left: 8px;
+  color: var(--accent-ink);
+}
+
+.q__actions {
+  justify-content: flex-end;
+}
+
+.q__skipped {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+}
+
+.answers__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px 12px 20px;
+  border-top: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.answers__hint {
+  margin-left: 12px;
+}
+
+/* ---------- Requirements panel ---------- */
+.req {
+  position: sticky;
+  top: var(--bar-h);
+  height: calc(100vh - var(--bar-h));
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  animation: slide 220ms var(--ease);
+}
+
+@keyframes slide {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+.req__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 16px 12px 20px;
+}
+
+.req__scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 20px 48px;
+  scrollbar-width: thin;
+}
+
+.req__block + .req__block {
+  margin-top: 28px;
+}
+
+.req__block > .label {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.req__block .insight + .insight {
+  margin-top: 14px;
+}
+
+/* Item rows */
+.ilist {
+  display: grid;
+}
+
+.irow {
+  position: relative;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  gap: 12px;
+  padding: 10px 8px;
+  margin: 0 -8px;
+  border-radius: var(--r);
+  transition: background var(--t) var(--ease);
+}
+
+.irow:hover {
+  background: var(--bg);
+}
+
+.irow.is-lit {
+  background: var(--mark);
+}
+
+.irow.is-fresh::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 2px;
+  height: 2px;
+  background: var(--accent);
+  transform-origin: left;
+  animation: grow 700ms var(--ease);
+}
+
+@keyframes grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+.irow__main {
+  grid-column: 2;
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.irow__group {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+
+.irow__text {
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+.irow--inferred .irow__text,
+.irow--proposed .irow__text,
+.irow--assumption .irow__text {
+  color: var(--ink);
+}
+
+.irow__why {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  line-height: 1.55;
+}
+
+.irow__status {
+  color: var(--accent-ink);
+  margin-right: 6px;
+}
+
+.irow__actions {
+  margin-top: 4px;
+}
+
+.irow__details {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+
+.irow__more {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--t) var(--ease);
+}
+
+.irow:hover .irow__more,
+.irow:focus-within .irow__more {
+  opacity: 1;
+}
+
+.irow__edit {
+  display: grid;
+  gap: 6px;
+}
+
+.irow__edit-actions {
+  justify-content: flex-end;
+}
+
+/* Full baseline: a quiet outline of headings and plain text. */
+.baseline {
+  display: grid;
+  gap: 22px;
+}
+
+.bgroup__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  padding-bottom: 4px;
+}
+
+.bgroup__missing {
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--accent-ink);
+}
+
+.bgroup__empty {
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+  padding: 2px 0;
+}
+
+.baseline__foot {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 1279px) {
+  .explore {
+    --req-w: 360px;
+  }
+}
+
+@media (max-width: 1023px) {
+  .explore.has-panel {
+    display: block;
+  }
+
+  /* Keep the requirements toggle reachable while reading the thread. */
+  .talk__head {
+    position: sticky;
+    top: var(--bar-h);
+    z-index: 10;
+    align-items: center;
+    margin: 0 calc(var(--pad) * -1) 16px;
+    padding: 12px var(--pad);
+    background: color-mix(in srgb, var(--bg) 94%, transparent);
+    backdrop-filter: blur(8px);
+  }
+
+  .req {
+    position: fixed;
+    top: var(--bar-h);
+    right: 0;
+    bottom: 0;
+    height: auto;
+    width: min(420px, 100vw);
+    z-index: 40;
+    box-shadow: -12px 0 32px rgba(30, 28, 24, 0.1);
+  }
+}
+
+@media (max-width: 600px) {
+  .talk {
+    padding-top: 24px;
+  }
+
+  .talk__head .page-title {
+    font-size: 19px;
+  }
+
+  .talk__head .btn--ghost {
+    display: none;
+  }
+
+  .msg {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .answers {
+    margin-left: calc(var(--pad) * -1);
+    margin-right: calc(var(--pad) * -1);
+    border-radius: 0;
+  }
+
+  .q__head {
+    padding: 12px 16px;
+  }
+
+  .q__body {
+    padding: 0 16px 16px;
+  }
+
+  .answers__foot {
+    padding: 12px 16px;
+  }
+
+  .answers__hint {
+    display: block;
+    margin: 2px 0 0;
+  }
+
+  .answers__foot .btn--primary {
+    width: 100%;
+  }
+
+  .irow__more {
+    opacity: 1;
+  }
+}

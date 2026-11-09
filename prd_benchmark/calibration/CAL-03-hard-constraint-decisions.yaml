@@ -1,0 +1,62 @@
+id: CAL-03
+title: 违反明确 H 条目：待定、确认、否决与无效裁定
+case_id: PQB-P03
+covers: [hard_constraint, pending, confirmed, rejected]
+document: |-
+  # 采购审批 PRD
+  所有申请先由直属主管审批，预估金额大于或等于 2 万元的再经财务审批。
+  48 小时未处理时提醒审批人。
+  审批人超过 72 小时未处理时自动通过。
+responses:
+  - fill: {verdict: covered, quote: 所有申请先由直属主管审批}
+    items:
+      # The item's own verdict (reminder present, escalation absent) is what
+      # stands if a human rejects the H3 claim.
+      R8:
+        verdict: partial
+        quote: 48 小时未处理时提醒审批人
+        hard_constraint_claim:
+          violated_constraint: H3
+          quotes: [审批人超过 72 小时未处理时自动通过]
+          behavior_impact: 「审批人超过 72 小时未处理时自动通过」会让无人审批的申请直接进入采购，而题面要求上报上级且不得自动通过
+          defect_key: timeout-auto-approve
+reviews:
+  # R weights 17; R8 (core) partial loses 1 -> coverage 25 x 16/17 = 23.5294.
+  - name: pending
+    expect:
+      status: pending
+      final_total: null
+      base_total: 98.5294
+      # Confirmed: R8 credit 0 (25 x 15/17 = 22.0588), correctness capped at 1 (5).
+      if_confirmed_total: 82.0588
+      if_rejected_total: 98.5294
+      provisional_pass: null
+      correctness_caps: {base: [4], if_confirmed: [1], if_rejected: [4]}
+      candidates:
+        - {rule_id: G1, violated_constraint: H3, decision: pending}
+  - name: confirmed
+    human:
+      decisions: [{claim: [H3, timeout-auto-approve], decision: confirmed}]
+    expect:
+      status: final
+      final_total: 82.0588
+      provisional_pass: false
+      candidates:
+        - {rule_id: G1, violated_constraint: H3, decision: confirmed}
+  - name: rejected
+    human:
+      decisions: [{claim: [H3, timeout-auto-approve], decision: rejected}]
+    expect:
+      # Only the penalty the claim caused is removed: R8 keeps its own partial.
+      status: final
+      final_total: 98.5294
+      provisional_pass: true
+      candidates:
+        - {rule_id: G1, violated_constraint: H3, decision: rejected}
+  - name: unknown-decision-id
+    human:
+      decisions: [{candidate_id: deadbeef00, decision: confirmed}]
+    expect:
+      status: pending
+      final_total: null
+      unknown_decisions: 1

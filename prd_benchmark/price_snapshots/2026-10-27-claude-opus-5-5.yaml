@@ -1,0 +1,22 @@
+# DRAFT price snapshot for a Judge candidate. Anthropic first-party API rates,
+# transcribed on 2026-10-27 from the official pricing page. They apply only to
+# Anthropic API-key billing; a gateway, subscription, Bedrock or Vertex bills
+# differently. A person must verify before any approved run.
+snapshot_id: 2026-10-27-claude-opus-5-5
+provider: anthropic
+model_id: claude-opus-5-5
+billing: api_per_token
+currency: USD
+source_url: https://platform.claude.com/docs/en/about-claude/pricing
+retrieved_at: "2026-10-27"
+status: draft
+verified_by: null
+prices:
+  - {item: input_cache_miss, usd_per_mtok: 4.0}
+  - {item: cache_write_5m, usd_per_mtok: 5.0}
+  - {item: cache_write_1h, usd_per_mtok: 8.0}
+  - {item: input_cache_hit, usd_per_mtok: 0.2}
+  - {item: output, usd_per_mtok: 20.0}
+notes: >-
+  Thinking cannot be disabled on this model and is billed as output.
+  inference_geo US-only would add 1.1x (not used). Fast mode not used.

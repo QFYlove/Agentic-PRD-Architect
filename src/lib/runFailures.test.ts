@@ -39,7 +39,11 @@ describe("incomplete-output messages", () => {
     const interrupted = localizedErrorMessage("PROVIDER_OUTPUT_INTERRUPTED");
 
     expect(new Set([truncated, unfinished, interrupted]).size).toBe(3);
-    expect(truncated).toContain("长度限制");
+    // A truncation is not retried with the same request; the message says so
+    // and names the recovery the failure panel offers.
+    expect(truncated).toContain("输出上限");
+    expect(truncated).toContain("精简模式");
+    expect(truncated).not.toContain("重试后");
     expect(unfinished).toContain("提前结束");
     expect(interrupted).toContain("中断");
     for (const message of [truncated, unfinished, interrupted]) {
@@ -149,21 +153,112 @@ describe("what a failed run still has", () => {
       ),
     );
 
-    expect(notice).toEqual({ headline: "首版 PRD 生成失败", detail: null });
+    expect(notice).toMatchObject({
+      headline: "首版 PRD 生成失败",
+      detail: null,
+    });
   });
 
-  it("stays silent for a healthy run and for a version that did commit", () => {
+  it("stays silent for a healthy run and names the step after a committed version", () => {
     const committed = loaded(
       makeSnapshot({
         status: "FAILED",
         current_iteration: 1,
         versions: [makeVersion(1)],
+        error: {
+          code: "PROVIDER_AUTHENTICATION_FAILED",
+          message: "x",
+          retryable: false,
+          stage: "review",
+          node: "ux_reviewer",
+          version: 1,
+          recovery_action: "check_configuration",
+        },
       }),
     );
 
-    expect(failureNotice(committed)).toBeNull();
+    const notice = failureNotice(committed);
+    // v1 exists, so the run did not lose it: the failure is the review of v1.
+    expect(notice?.headline).toBe("v1 的三方评审失败");
+    expect(notice?.stageLabel).toBe("三方评审 · 体验评审");
+    expect(notice?.detail).toContain("v1");
+    // A configuration problem offers no retry button, only guidance.
+    expect(notice?.actions).toEqual([]);
+    expect(notice?.guidance).toContain("API Key");
     expect(failureNotice(loaded(makeSnapshot()))).toBeNull();
     expect(failureNotice(initialRunViewState)).toBeNull();
+  });
+
+  it("offers a compact regeneration, not a same-request retry, after a truncation", () => {
+    const state = loaded(
+      makeSnapshot({ status: "GENERATING", current_iteration: 1 }),
+      makeEvent(1, "prd_delta", { version: 1, delta: "# Half a doc" }, 1),
+      makeEvent(
+        2,
+        "run_failed",
+        {
+          error_code: "PROVIDER_OUTPUT_TRUNCATED",
+          retryable: false,
+          error: {
+            code: "PROVIDER_OUTPUT_TRUNCATED",
+            message: "x",
+            retryable: false,
+            stage: "generation",
+            node: "generator",
+            version: 1,
+            attempt: 1,
+            recovery_action: "regenerate_compact",
+            category: "output_limit",
+          },
+        },
+        1,
+      ),
+    );
+
+    const notice = failureNotice(state);
+    expect(notice?.headline).toBe("首版 PRD 生成失败");
+    expect(notice?.actions?.map((action) => action.mode)).toEqual([
+      "regenerate_compact",
+    ]);
+    expect(notice?.actions?.[0]?.primary).toBe(true);
+    expect(notice?.draftCharacters).toBe("# Half a doc".length);
+    // The fragment is kept for reading but is not a usable version.
+    expect(state.drafts[1]?.interrupted).toBe(true);
+  });
+
+  it("offers to continue from the best version when one survived", () => {
+    const notice = failureNotice(
+      loaded(
+        makeSnapshot({
+          status: "FAILED",
+          current_iteration: 2,
+          best_version: 1,
+          best_score: 76,
+          versions: [
+            makeVersion(1, { evaluation: makeEvaluation(78, 76, 74) }),
+          ],
+          error: {
+            code: "PROVIDER_OUTPUT_TRUNCATED",
+            message: "x",
+            retryable: false,
+            stage: "generation",
+            node: "generator",
+            version: 2,
+            recovery_action: "continue_from_best",
+            category: "output_limit",
+          },
+        }),
+      ),
+    );
+
+    expect(notice?.headline).toBe("v2 生成失败");
+    expect(notice?.actions?.[0]).toMatchObject({
+      mode: "continue_from_best",
+      primary: true,
+    });
+    expect(notice?.actions?.map((action) => action.mode)).not.toContain(
+      "restart",
+    );
   });
 
   /**
@@ -173,7 +268,7 @@ describe("what a failed run still has", () => {
    */
   it("shows the specific cause of a live failure in the top banner", () => {
     for (const [code, expected] of [
-      ["RUN_TIMEOUT", "任务运行超时，请缩小需求范围后重试。"],
+      ["RUN_TIMEOUT", localizedErrorMessage("RUN_TIMEOUT")],
       [
         "PROVIDER_OUTPUT_TRUNCATED",
         localizedErrorMessage("PROVIDER_OUTPUT_TRUNCATED"),

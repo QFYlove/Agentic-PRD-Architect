@@ -1,0 +1,10 @@
+# Generated benchmark artifacts stay local by default (open decision D3).
+# Versioned: cases, methodology, prompts, scoring code, price snapshots, and
+# redacted summary reports copied deliberately into reports/published/.
+runs/
+scores/
+review/
+ledgers/
+reports/*
+!reports/published/
+judge_manual/

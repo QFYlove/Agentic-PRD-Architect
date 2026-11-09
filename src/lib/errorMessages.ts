@@ -18,8 +18,11 @@ const ERROR_MESSAGES: Record<string, string> = {
   // Three distinct causes, three distinct sentences. They used to share one
   // code, which meant an output-length problem and a mid-stream service failure
   // read identically and neither told the user what to change.
+  // Not retried with the same request any more: the identical request needs the
+  // identical length. The next step is a compact regeneration, which the
+  // failure panel offers as a button.
   PROVIDER_OUTPUT_TRUNCATED:
-    "PRD 输出达到长度限制，系统重试后仍未能完整生成。可以精简需求描述或降低目标篇幅后重新运行。",
+    "PRD 超出了模型单次输出上限，未能完整生成。系统没有重复发送相同请求，可以使用精简模式重新生成。",
   PROVIDER_OUTPUT_UNFINISHED:
     "模型提前结束了 PRD 输出，系统重试后仍未得到完整文档，请重新运行。",
   PROVIDER_OUTPUT_INTERRUPTED: "模型服务在生成过程中暂时中断，请稍后重新生成。",
@@ -30,7 +33,15 @@ const ERROR_MESSAGES: Record<string, string> = {
     "模型服务的内容安全策略拦截了本次生成，请调整需求描述后重试。",
   PROVIDER_ERROR: "模型服务调用失败，请稍后重试。",
   PROVIDER_UNAVAILABLE: "模型服务不可用，请检查 Provider 配置。",
-  RUN_TIMEOUT: "任务运行超时，请缩小需求范围后重试。",
+  RUN_TIMEOUT: "任务用完了总运行时长，已完成的版本均已保留。",
+  NODE_TIMEOUT: "模型调用超时，系统已自动重试一次仍未成功，请稍后重试。",
+  RUN_INTERRUPTED:
+    "后端服务在任务完成前重启，任务被中断，已完成的版本均已保留。",
+  PROVIDER_SELECTION_UNAVAILABLE:
+    "该任务使用的模型已不可用，无法继续；可以新建任务或选择其他模型。",
+  RUN_NOT_TERMINAL: "任务仍在运行，结束后才能基于它重新生成。",
+  NO_COMPLETED_VERSION: "该任务没有已完成的版本，无法从最佳版本继续。",
+  INVALID_E2E_SCENARIO: "测试场景无效。",
   STRUCTURED_OUTPUT_INVALID: "模型返回的数据格式无效，请重新运行。",
   WORKFLOW_FAILED: "工作流未能完成，请重新运行。",
   APP_SHUTTING_DOWN: "服务正在关闭，请稍后重试。",

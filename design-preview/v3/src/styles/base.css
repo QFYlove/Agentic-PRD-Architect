@@ -1,0 +1,252 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--t-body);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p,
+ol,
+ul,
+dl,
+dd,
+blockquote {
+  margin: 0;
+  padding: 0;
+}
+
+ol,
+ul {
+  list-style: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent-wash);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "zero" 1;
+  letter-spacing: 0.02em;
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.display {
+  font-size: var(--t-display);
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: -0.035em;
+}
+
+.hint {
+  color: var(--ink-3);
+  font-size: var(--t-ui);
+}
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  height: 40px;
+  padding: 0 var(--s4);
+  font-size: var(--t-ui);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  border: 1px solid var(--rule-strong);
+  transition:
+    background var(--fast) var(--ease),
+    color var(--fast) var(--ease);
+  white-space: nowrap;
+}
+
+.btn--primary {
+  background: var(--ink);
+  color: var(--sheet);
+  border-color: var(--ink);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.btn--primary span[aria-hidden] {
+  transition: transform var(--fast) var(--ease);
+}
+
+.btn--primary:hover:not(:disabled) span[aria-hidden] {
+  transform: translateX(3px);
+}
+
+.btn--line {
+  background: transparent;
+}
+
+.btn--line:hover:not(:disabled) {
+  background: var(--ink);
+  color: var(--sheet);
+}
+
+.btn--small {
+  height: 30px;
+  padding: 0 var(--s3);
+  background: var(--ink);
+  color: var(--sheet);
+  border-color: var(--ink);
+}
+
+.btn:disabled {
+  opacity: 0.38;
+}
+
+/* Small text action: underline on hover, no box. */
+.act {
+  font-size: var(--t-ui);
+  color: var(--ink-2);
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.act:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--rule-strong);
+}
+
+.act--yes {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.act.is-on {
+  background: var(--ink);
+  color: var(--sheet);
+}
+
+.link {
+  font-size: var(--t-ui);
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--rule);
+}
+
+.link:hover {
+  color: var(--accent-ink);
+  text-decoration-color: currentColor;
+}
+
+/* Segmented control: hairline frame, filled when selected. */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--rule-strong);
+}
+
+.seg button {
+  font-size: var(--t-ui);
+  padding: 4px 10px;
+  color: var(--ink-2);
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.seg button + button {
+  border-left: 1px solid var(--rule);
+}
+
+.seg button.is-on {
+  background: var(--ink);
+  color: var(--sheet);
+}
+
+.seg button:disabled {
+  opacity: 0.4;
+}
+
+.seg__n {
+  font-family: var(--font-mono);
+  font-size: var(--t-meta);
+  background: var(--accent);
+  color: #fff;
+  padding: 0 4px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--t-ui);
+  color: var(--ink-2);
+}
+
+.check input {
+  accent-color: var(--ink);
+}
+
+.chev {
+  font-family: var(--font-mono);
+  color: var(--ink-3);
+  width: 12px;
+  text-align: center;
+}
+
+/* Filled (pressed) states keep their inverted colours on hover. */
+.act.is-on:hover:not(:disabled),
+.act[aria-expanded="true"]:hover:not(:disabled) {
+  color: var(--sheet);
+}

@@ -64,6 +64,11 @@ class RetryableProviderError(ProviderError):
     retryable = True
     user_message = "The provider remained unavailable after retry."
 
+    def __init__(self, *args: object, retry_after: float | None = None) -> None:
+        super().__init__(*args)
+        #: Seconds the provider asked us to wait (``Retry-After``), when it said.
+        self.retry_after = retry_after
+
 
 class ProviderAuthenticationError(ProviderError):
     code = "PROVIDER_AUTHENTICATION_FAILED"
@@ -91,18 +96,12 @@ class ProviderRequestRejectedError(ProviderError):
 
 
 class ProviderIncompleteOutputError(RetryableProviderError):
-    """The model stopped before finishing the document.
+    """The model stopped before finishing the document, for a reason a second
+    identical attempt can plausibly get past.
 
-    Retryable on purpose: every subclass below describes a stop that a second
-    attempt can succeed at. The generator's existing retry loop handles them, and
-    a truncated body never becomes a ``PRDVersion``.
-
-    The subclasses exist because the three causes need different words in front
-    of a user: an output cap is a document-too-long problem, a missing end marker
-    is the model quitting early, and a resource rejection is the service being
-    unwell. Collapsing them into one code made every one of them read as
-    「操作失败，请稍后重试」. The base code stays valid so runs recorded before
-    the split still resolve to a message.
+    The two subclasses below are retried once by the generator. An output cap is
+    deliberately *not* one of them: see ``ProviderOutputTruncatedError``. The base
+    code stays valid so runs recorded before the split still resolve to a message.
     """
 
     code = "PROVIDER_OUTPUT_INCOMPLETE"
@@ -110,10 +109,18 @@ class ProviderIncompleteOutputError(RetryableProviderError):
     user_message = "The provider returned an incomplete document."
 
 
-class ProviderOutputTruncatedError(ProviderIncompleteOutputError):
-    """The output cap cut the document off (``finish_reason`` length/max_tokens)."""
+class ProviderOutputTruncatedError(ProviderError):
+    """The output cap cut the document off (``finish_reason`` length/max_tokens).
+
+    Not retryable, and not a subclass of ``RetryableProviderError`` on purpose.
+    Run 9fa59292 sent the same 18,225-token request twice; both attempts stopped at
+    exactly the 16,000-token cap and 68,450 tokens bought no version. The request
+    did not change, so the length it needed did not change either. Recovery is a
+    *different* request -- a compact regeneration -- which only the user starts.
+    """
 
     code = "PROVIDER_OUTPUT_TRUNCATED"
+    retryable = False
     user_message = "The provider hit its output limit before finishing."
 
 
@@ -160,3 +167,11 @@ class ProviderUnavailableError(AppError):
             "The configured LLM provider is not available.",
             503,
         )
+
+
+class NodeTimeoutError(TimeoutError):
+    """One provider call exceeded its own per-node timeout."""
+
+
+class RunTimeoutError(TimeoutError):
+    """The run as a whole exhausted ``run_timeout_seconds``."""

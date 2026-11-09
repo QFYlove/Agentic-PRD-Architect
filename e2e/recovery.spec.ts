@@ -35,9 +35,9 @@ test("three SSE connection failures recover through an atomic snapshot", async (
   const snapshot = await getSnapshot(request, runId);
   const v2 = snapshot.versions[1]!;
   await expect(page.getByTestId("prd-content")).toContainText(
-    "Reliability, Refunds, and Risk Controls",
+    "Payment Failure and Refunds",
   );
-  expect(v2.content.match(/## Product Idea/g)).toHaveLength(1);
+  expect(v2.content.match(/## 1\. Product Overview/g)).toHaveLength(1);
 });
 
 test("network loss between reviewer events replays without duplicates", async ({
@@ -46,10 +46,8 @@ test("network loss between reviewer events replays without duplicates", async ({
   context,
 }) => {
   const runId = await startRun(page);
-  // The trace tab is where reviewer progress is logged now, so that is where
-  // this waits for the run to be mid-review before pulling the network.
-  await page.getByTestId("workspace-tab-trace").click();
-  await expect(page.getByText("技术评审").first()).toBeVisible();
+  // Wait for the run to be mid-review before pulling the network.
+  await expect(page.getByTestId("run-status")).toHaveText("评审中");
   const runUrl = page.url();
   await context.setOffline(true);
   await page.reload({ timeout: 1_000 }).catch(() => null);
@@ -65,6 +63,9 @@ test("network loss between reviewer events replays without duplicates", async ({
   await expect(page.getByRole("tab", { name: /^v\d/ })).toHaveCount(2);
 
   await page.getByTestId("workspace-tab-trace").click();
+  await page.getByTestId("run-debug").locator("summary").click();
+  // The reopened run replays its durable history, so the trace is not empty.
+  await expect(page.getByTestId("trace-event").first()).toBeVisible();
   const renderedSequences = await page
     .getByTestId("trace-event")
     .evaluateAll((items) =>

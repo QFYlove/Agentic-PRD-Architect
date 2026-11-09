@@ -1,0 +1,26 @@
+# DRAFT price snapshot. Transcribed on 2026-10-27 from the official page via an
+# automated page summary; a person must check every figure against the page
+# and set status: verified + verified_by before any approved run.
+snapshot_id: 2026-10-27-deepseek-flash
+provider: deepseek
+model_id: deepseek-flash
+billing: api_per_token
+currency: USD
+source_url: https://api-docs.deepseek.com/quick_start/pricing/
+retrieved_at: "2026-10-27"
+status: draft
+verified_by: null
+prices:
+  - {item: input_cache_hit, usd_per_mtok: 0.006, period: peak}
+  - {item: input_cache_hit, usd_per_mtok: 0.003, period: offpeak}
+  - {item: input_cache_miss, usd_per_mtok: 0.3, period: peak}
+  - {item: input_cache_miss, usd_per_mtok: 0.15, period: offpeak}
+  - {item: output, usd_per_mtok: 1.2, period: peak}
+  - {item: output, usd_per_mtok: 0.6, period: offpeak}
+peak_windows:
+  - {days: [mon, tue, wed, thu, fri], start_utc: "01:00", end_utc: "04:00"}
+  - {days: [mon, tue, wed, thu, fri], start_utc: "06:00", end_utc: "10:00"}
+peak_exclusions: Chinese public holidays are off-peak (not modelled; treated as peak, which only overestimates)
+notes: >-
+  Page states deepseek-flash is served by DeepSeek-V4.1-Flash-1017 and that
+  off-peak rates are half of peak. deepseek-flash is a floating alias.

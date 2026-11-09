@@ -1,0 +1,133 @@
+id: CAL-14
+title: 重复候选的合并边界
+case_id: PQB-P07
+covers:
+  - merge_same_h_same_defect
+  - no_merge_different_h
+  - no_merge_same_h_different_defect
+  - candidate_merge_report
+document: |-
+  # 候选人档案 PRD
+  保全期间候选人提交删除请求的，系统核实身份后立即删除档案。
+  保全期间档案到期后由清理任务照常删除。
+  审计日志保留 1 年。
+  系统管理员可以查看简历内容以便排查问题。
+responses:
+  # Pass 1.
+  - fill: {verdict: covered, quote: 审计日志保留 1 年}
+    items:
+      # Same H (H4), two independent defects with distinct keys and distinct
+      # text: request-driven deletion vs. scheduled cleanup.
+      R8:
+        verdict: partial
+        quote: 保全期间候选人提交删除请求的，系统核实身份后立即删除档案
+        hard_constraint_claim:
+          violated_constraint: H4
+          quotes: [保全期间候选人提交删除请求的，系统核实身份后立即删除档案]
+          behavior_impact: 「系统核实身份后立即删除档案」会在保全期间按候选人请求删除被保全档案
+          defect_key: hold-bypassed-by-request
+      R6:
+        verdict: covered
+        quote: 保全期间档案到期后由清理任务照常删除
+        hard_constraint_claim:
+          violated_constraint: H4
+          quotes: [保全期间档案到期后由清理任务照常删除]
+          behavior_impact: 「保全期间档案到期后由清理任务照常删除」会让到期清理任务删除被保全档案
+          defect_key: hold-bypassed-by-cleanup
+      # A different H (H5) on a different defect.
+      R11:
+        verdict: partial
+        quote: 审计日志保留 1 年
+        hard_constraint_claim:
+          violated_constraint: H5
+          quotes: [审计日志保留 1 年]
+          behavior_impact: 「审计日志保留 1 年」会在第 2、3 年丢失题面要求保留的审计记录
+          defect_key: audit-retention-too-short
+      # H7 claim; the judge also proposes the case rule P07-X1 on the same text,
+      # which is folded into the claim (case rule id kept).
+      R4:
+        verdict: partial
+        quote: 系统管理员可以查看简历内容以便排查问题
+        hard_constraint_claim:
+          violated_constraint: H7
+          quotes: [系统管理员可以查看简历内容以便排查问题]
+          behavior_impact: 「系统管理员可以查看简历内容」使管理员能直接读取候选人简历，违反职责分离
+          defect_key: admin-reads-resumes
+    critical_candidates:
+      - {rule_id: P07-X1, quote: 系统管理员可以查看简历内容以便排查问题, rationale: 管理员可查看简历}
+      # G3 on the same text is a different condition: not folded.
+      - {rule_id: G3, quote: 系统管理员可以查看简历内容以便排查问题, rationale: 越权可见}
+  # Pass 2: the request-deletion defect is found again under the same H and key
+  # (on a different item), and the admin defect again.
+  - fill: {verdict: covered, quote: 审计日志保留 1 年}
+    items:
+      R2:
+        verdict: covered
+        quote: 审计日志保留 1 年
+        hard_constraint_claim:
+          violated_constraint: H4
+          quotes: [保全期间候选人提交删除请求的，系统核实身份后立即删除档案]
+          behavior_impact: 「立即删除档案」会在诉讼保全期间删除证据
+          defect_key: hold-bypassed-by-request
+      R4:
+        verdict: partial
+        quote: 系统管理员可以查看简历内容以便排查问题
+        hard_constraint_claim:
+          violated_constraint: H7
+          quotes: [系统管理员可以查看简历内容以便排查问题]
+          behavior_impact: 「系统管理员可以查看简历内容」使管理员能读取简历
+          defect_key: admin-reads-resumes
+    critical_candidates:
+      - {rule_id: P07-X1, quote: 系统管理员可以查看简历内容以便排查问题, rationale: 同上}
+reviews:
+  - name: auto
+    expect:
+      status: pending
+      final_total: null
+      pass_status: pending
+      # H4 x2 (two defects), H5, H7 (with P07-X1 folded), G3: five candidates.
+      candidate_count: 5
+      candidate_details:
+        - rule_id: G1
+          violated_constraint: H4
+          defect_key: hold-bypassed-by-request
+          occurrences: [pass1:R8, pass2:R2]
+          merge_basis: [same_h_and_defect_key]
+          no_review_flags: true
+        - rule_id: G1
+          violated_constraint: H4
+          defect_key: hold-bypassed-by-cleanup
+          occurrences: [pass1:R6]
+          merge_basis: []
+        - rule_id: G1
+          violated_constraint: H5
+          occurrences: [pass1:R11]
+          merge_basis: []
+        - rule_id: P07-X1
+          violated_constraint: H7
+          occurrences: [pass1:R4, pass2:R4, pass1:candidate, pass2:candidate]
+          merged_rule_ids: [G1]
+          merge_basis: [same_h_and_defect_key, judge_candidate_same_quote]
+          review_flags: ["shares_quote_with:"]
+        - rule_id: G3
+          violated_constraint: null
+          occurrences: [pass1:candidate]
+          review_flags: ["shares_quote_with:"]
+  - name: one-of-two-same-h-confirmed
+    human:
+      decisions:
+        - {claim: [H4, hold-bypassed-by-request], decision: confirmed}
+        - {claim: [H4, hold-bypassed-by-cleanup], decision: rejected}
+        - {claim: [H5, audit-retention-too-short], decision: rejected}
+        - {claim: [H7, admin-reads-resumes], decision: rejected}
+        - {candidate: [G3, 系统管理员可以查看简历内容以便排查问题], decision: rejected}
+    expect:
+      # Deciding one H4 defect does not decide the other.
+      status: final
+      pass_status: fail
+      candidates:
+        - {rule_id: G1, violated_constraint: H4, decision: confirmed}
+        - {rule_id: G1, violated_constraint: H4, decision: rejected}
+        - {rule_id: G1, violated_constraint: H5, decision: rejected}
+        - {rule_id: G3, violated_constraint: null, decision: rejected}
+        - {rule_id: P07-X1, violated_constraint: H7, decision: rejected}

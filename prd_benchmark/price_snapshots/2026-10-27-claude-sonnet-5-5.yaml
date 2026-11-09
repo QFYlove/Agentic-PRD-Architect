@@ -1,0 +1,17 @@
+# DRAFT price snapshot for a Judge candidate (see the Opus file for caveats).
+snapshot_id: 2026-10-27-claude-sonnet-5-5
+provider: anthropic
+model_id: claude-sonnet-5-5
+billing: api_per_token
+currency: USD
+source_url: https://platform.claude.com/docs/en/about-claude/pricing
+retrieved_at: "2026-10-27"
+status: draft
+verified_by: null
+prices:
+  - {item: input_cache_miss, usd_per_mtok: 2.0}
+  - {item: cache_write_5m, usd_per_mtok: 2.5}
+  - {item: cache_write_1h, usd_per_mtok: 4.0}
+  - {item: input_cache_hit, usd_per_mtok: 0.1}
+  - {item: output, usd_per_mtok: 10.0}
+notes: Thinking is billed as output.

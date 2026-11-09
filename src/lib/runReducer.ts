@@ -1,11 +1,15 @@
 import type {
   EvaluationResult,
   FeedbackItem,
+  FindingResolution,
+  GateStatus,
   NodeStatus,
+  PRDQualityReport,
   PRDVersion,
   RevisionPlan,
   ReviewRole,
   RoleReview,
+  RunError,
   RunEvent,
   RunSnapshot,
   RunStatus,
@@ -27,6 +31,33 @@ export interface VersionDraft {
   attempt: number;
   content: string;
   complete: boolean;
+  /**
+   * The generation stopped before finishing (the run failed or was interrupted).
+   * Such a draft is shown for reference only: never as "正在生成", never selected
+   * by default, never downloaded, scored, or compared.
+   */
+  interrupted?: boolean;
+}
+
+/** Whether a draft is a finished, usable version of the document. */
+export function isUsableDraft(draft: VersionDraft | null | undefined): boolean {
+  return Boolean(
+    draft && draft.complete && !draft.interrupted && draft.content,
+  );
+}
+
+/**
+ * The aggregated review of one version, as the backend computed it.
+ *
+ * `combined` is the de-duplicated list -- the per-role lists still hold every
+ * reviewer's own findings. Legacy runs have no gate status or resolutions.
+ */
+export interface VersionFindings {
+  combined: FeedbackItem[];
+  beforeDedup: number | null;
+  gateStatus: GateStatus | null;
+  rubricVersion: string | null;
+  resolutions: FindingResolution[];
 }
 
 /** Open findings for one version, split by how much each one blocks. */
@@ -154,6 +185,12 @@ export interface RunViewState {
   isCreating: boolean;
   pendingControl: "pause" | "resume" | "cancel" | null;
   error: string | null;
+  /** The structured failure of a failed run, with stage, node, and next step. */
+  runError: RunError | null;
+  findingsByVersion: Record<number, VersionFindings>;
+  qualityByVersion: Record<number, PRDQualityReport>;
+  /** True once the durable history of this run has been merged into `events`. */
+  historyLoaded: boolean;
 }
 
 export const initialRunViewState: RunViewState = {
@@ -176,6 +213,10 @@ export const initialRunViewState: RunViewState = {
   isCreating: false,
   pendingControl: null,
   error: null,
+  runError: null,
+  findingsByVersion: {},
+  qualityByVersion: {},
+  historyLoaded: false,
 };
 
 export type RunAction =
@@ -183,6 +224,7 @@ export type RunAction =
   | { type: "RUN_SELECTED"; runId: string }
   | { type: "SNAPSHOT_LOADED"; snapshot: RunSnapshot }
   | { type: "EVENT_RECEIVED"; event: RunEvent }
+  | { type: "HISTORY_LOADED"; runId: string; events: RunEvent[] }
   | { type: "CONNECTION_CHANGED"; connection: ConnectionStatus }
   | {
       type: "CONTROL_STARTED";
@@ -331,6 +373,77 @@ function versionsFromSnapshot(
         content: version.content,
         complete: true,
       },
+    ]),
+  );
+}
+
+function findingsFromEvaluation(evaluation: EvaluationResult): VersionFindings {
+  return {
+    combined: normalizeFeedback(
+      evaluation.combined_feedback.length > 0
+        ? evaluation.combined_feedback
+        : (["tech", "ux", "biz"] as const).flatMap((role) =>
+            normalizeFeedback(evaluation[role].feedback).map((item) => ({
+              ...item,
+              source_roles: item.source_roles ?? [role],
+            })),
+          ),
+    ),
+    beforeDedup:
+      typeof evaluation.findings_before_dedup === "number"
+        ? evaluation.findings_before_dedup
+        : null,
+    gateStatus: evaluation.gate_status ?? null,
+    rubricVersion: evaluation.rubric_version ?? null,
+    resolutions: Array.isArray(evaluation.finding_resolutions)
+      ? evaluation.finding_resolutions
+      : [],
+  };
+}
+
+function findingsFromSnapshot(
+  versions: PRDVersion[],
+): Record<number, VersionFindings> {
+  return Object.fromEntries(
+    versions
+      .filter((version) => version.evaluation)
+      .map((version) => [
+        version.version,
+        findingsFromEvaluation(version.evaluation!),
+      ]),
+  );
+}
+
+function qualityFromSnapshot(
+  versions: PRDVersion[],
+): Record<number, PRDQualityReport> {
+  return Object.fromEntries(
+    versions
+      .filter((version) => version.quality)
+      .map((version) => [version.version, version.quality!]),
+  );
+}
+
+/**
+ * The version a reader should land on: the newest usable one.
+ *
+ * An interrupted draft is deliberately skipped -- run 9fa59292 opened on its
+ * half-written v2, labelled 「正在生成」, with the download button live.
+ */
+function defaultSelection(drafts: Record<number, VersionDraft>): number | null {
+  const ordered = Object.values(drafts).sort((a, b) => a.version - b.version);
+  const usable = ordered.filter((draft) => !draft.interrupted);
+  return (usable.at(-1) ?? ordered.at(-1))?.version ?? null;
+}
+
+/** Marks every unfinished draft as interrupted; finished ones are untouched. */
+function interruptDrafts(
+  drafts: Record<number, VersionDraft>,
+): Record<number, VersionDraft> {
+  return Object.fromEntries(
+    Object.entries(drafts).map(([key, draft]) => [
+      key,
+      draft.complete ? draft : { ...draft, interrupted: true },
     ]),
   );
 }
@@ -586,13 +699,65 @@ function finalRoundSeverity(
   );
 }
 
+function runErrorFromPayload(
+  payload: Record<string, unknown>,
+): RunError | null {
+  const structured = payload.error;
+  if (
+    typeof structured === "object" &&
+    structured !== null &&
+    typeof (structured as RunError).code === "string"
+  ) {
+    return structured as RunError;
+  }
+  const code =
+    stringPayload(payload, "error_code") ?? stringPayload(payload, "code");
+  if (code === null) {
+    return null;
+  }
+  return {
+    code,
+    message: stringPayload(payload, "message") ?? "",
+    retryable: payload.retryable === true,
+  };
+}
+
+/** The best finished version, else the newest finished one. */
+function bestUsable(
+  drafts: Record<number, VersionDraft>,
+  bestVersion: number | null,
+): number | null {
+  if (bestVersion !== null && isUsableDraft(drafts[bestVersion])) {
+    return bestVersion;
+  }
+  const usable = Object.values(drafts)
+    .filter((draft) => isUsableDraft(draft))
+    .sort((a, b) => a.version - b.version);
+  return usable.at(-1)?.version ?? null;
+}
+
+/** Merge events by sequence, oldest first, keeping one copy of each. */
+function mergeEvents(left: RunEvent[], right: RunEvent[]): RunEvent[] {
+  const bySequence = new Map<number, RunEvent>();
+  for (const event of [...left, ...right]) {
+    if (!bySequence.has(event.sequence)) {
+      bySequence.set(event.sequence, event);
+    }
+  }
+  return [...bySequence.values()].sort((a, b) => a.sequence - b.sequence);
+}
+
 function applyEvent(state: RunViewState, event: RunEvent): RunViewState {
   const payload = event.payload;
   const version = numberPayload(payload, "version", event.iteration);
   const next: RunViewState = {
     ...state,
     latestSequence: event.sequence,
-    events: [...state.events, event],
+    // History may already hold this sequence if it arrived before the live
+    // copy; the trace must list each event once.
+    events: state.events.some((item) => item.sequence === event.sequence)
+      ? state.events
+      : [...state.events, event],
     error: null,
   };
 
@@ -655,12 +820,17 @@ function applyEvent(state: RunViewState, event: RunEvent): RunViewState {
     case "prd_generated": {
       const attempt = numberPayload(payload, "attempt", 1);
       const content = stringPayload(payload, "content") ?? "";
+      const quality = payload.quality as PRDQualityReport | undefined;
       return {
         ...next,
         drafts: {
           ...state.drafts,
           [version]: { version, attempt, content, complete: true },
         },
+        qualityByVersion:
+          quality && typeof quality === "object"
+            ? { ...state.qualityByVersion, [version]: quality }
+            : state.qualityByVersion,
         selectedVersion: state.selectionPinned
           ? state.selectedVersion
           : version,
@@ -698,8 +868,32 @@ function applyEvent(state: RunViewState, event: RunEvent): RunViewState {
       const sentBestVersion = optionalNumberPayload(payload, "best_version");
       const sentBestScore = optionalNumberPayload(payload, "best_score");
       const improved = state.bestScore === null || overall > state.bestScore;
+      const combined = Array.isArray(payload.combined_feedback)
+        ? normalizeFeedback(payload.combined_feedback)
+        : null;
       return {
         ...next,
+        findingsByVersion: combined
+          ? {
+              ...state.findingsByVersion,
+              [event.iteration]: {
+                combined,
+                beforeDedup: optionalNumberPayload(
+                  payload,
+                  "findings_before_dedup",
+                ),
+                gateStatus:
+                  (stringPayload(
+                    payload,
+                    "gate_status",
+                  ) as GateStatus | null) ?? null,
+                rubricVersion: stringPayload(payload, "rubric_version"),
+                resolutions: Array.isArray(payload.finding_resolutions)
+                  ? (payload.finding_resolutions as FindingResolution[])
+                  : [],
+              },
+            }
+          : state.findingsByVersion,
         scoresByVersion: {
           ...state.scoresByVersion,
           [event.iteration]: {
@@ -783,11 +977,39 @@ function applyEvent(state: RunViewState, event: RunEvent): RunViewState {
     }
     case "run_cancelled":
       return { ...next, status: "CANCELLED", connection: "closed" };
-    case "run_failed":
+    case "run_failed": {
+      const runError = runErrorFromPayload(payload);
+      const drafts = interruptDrafts(state.drafts);
+      const selected = state.selectedVersion;
+      const selectionLost =
+        selected === null || drafts[selected]?.interrupted === true;
+      const nodeStatuses =
+        typeof payload.node_statuses === "object" &&
+        payload.node_statuses !== null
+          ? (payload.node_statuses as Record<string, NodeStatus>)
+          : null;
       return {
         ...next,
         status: "FAILED",
         connection: "closed",
+        drafts,
+        // The half-written version is still readable, but the reader lands
+        // on the best document the run actually finished.
+        selectedVersion:
+          state.selectionPinned && !selectionLost
+            ? selected
+            : (bestUsable(drafts, state.bestVersion) ?? selected),
+        selectionPinned: state.selectionPinned && !selectionLost,
+        runError,
+        snapshot: next.snapshot
+          ? {
+              ...next.snapshot,
+              status: "FAILED",
+              active_node: null,
+              error: runError ?? next.snapshot.error ?? null,
+              node_statuses: nodeStatuses ?? next.snapshot.node_statuses,
+            }
+          : null,
         // `RunManager.fail_run` sends `error_code`. Reading only `code` here is
         // what made every live failure render the generic fallback even though
         // the run had a specific, already-translated cause.
@@ -796,6 +1018,7 @@ function applyEvent(state: RunViewState, event: RunEvent): RunViewState {
             stringPayload(payload, "code"),
         ),
       };
+    }
     default:
       return next;
   }
@@ -843,16 +1066,25 @@ export function runReducer(
           attempt: streamedAttempt,
           content: streamed,
           complete: false,
+          // A terminal run is not generating anything. A draft left over is
+          // what a failed or cancelled generation streamed before it stopped
+          // -- including runs recorded before `incomplete_draft` existed.
+          ...(isTerminalRunStatus(snapshot.status) || snapshot.incomplete_draft
+            ? { interrupted: true }
+            : {}),
         };
       }
       const availableVersions = Object.keys(drafts).map(Number);
+      const best = bestFromSnapshot(snapshot);
       const selectedVersion =
         state.selectionPinned &&
         state.selectedVersion !== null &&
-        availableVersions.includes(state.selectedVersion)
+        availableVersions.includes(state.selectedVersion) &&
+        drafts[state.selectedVersion]?.interrupted !== true
           ? state.selectedVersion
-          : (availableVersions.at(-1) ?? null);
-      const best = bestFromSnapshot(snapshot);
+          : snapshot.status === "FAILED"
+            ? (bestUsable(drafts, best.bestVersion) ?? defaultSelection(drafts))
+            : defaultSelection(drafts);
       return {
         ...state,
         runId: snapshot.run_id,
@@ -878,8 +1110,20 @@ export function runReducer(
         error: snapshot.error
           ? localizedErrorMessage(snapshot.error.code)
           : null,
+        runError: snapshot.error ?? null,
+        findingsByVersion: findingsFromSnapshot(snapshot.versions),
+        qualityByVersion: qualityFromSnapshot(snapshot.versions),
       };
     }
+    case "HISTORY_LOADED":
+      if (action.runId !== state.runId) {
+        return state;
+      }
+      return {
+        ...state,
+        events: mergeEvents(state.events, action.events),
+        historyLoaded: true,
+      };
     case "EVENT_RECEIVED":
       if (
         action.event.run_id !== state.runId ||

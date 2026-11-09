@@ -15,11 +15,14 @@
   --color-canvas: #0b0f14;
   --color-surface: #11161d;
   --color-raised: #161c24;
-  --color-line: #28313c;
+  --color-sunken: #0e1319;
+  --color-line: #252e38;
   --color-line-strong: #3a4552;
-  --color-ink: #e7ebf0;
-  --color-ink-muted: #929caa;
-  --color-ink-faint: #66717f;
+  --color-ink: #e9edf2;
+  /* Raised from #929caa / #66717f: the faint tier failed WCAG AA on the
+     surface colour, and most metadata on the page was written in it. */
+  --color-ink-muted: #a3adba;
+  --color-ink-faint: #7d8896;
   --color-accent: #2cb7c9;
   --color-accent-soft: rgb(44 183 201 / 12%);
   --color-ok: #3baa7a;
@@ -108,25 +111,65 @@ body {
     @apply rounded-control border border-line bg-canvas px-3 py-2.5;
   }
 
+  /* An area inside a panel: a tint, not another border. Panels keep the only
+     hairline, so nesting reads as grouping rather than as boxes in boxes. */
+  .surface-sunken {
+    @apply rounded-control bg-sunken px-3.5 py-3;
+  }
+
+  .callout-danger {
+    @apply rounded-control border-l-2 border-danger bg-danger/10 px-3.5 py-3 text-ink;
+  }
+
+  .callout-warn {
+    @apply rounded-control border-l-2 border-warn bg-warn/10 px-3.5 py-2.5;
+  }
+
+  .chip {
+    @apply inline-flex min-h-7 items-center rounded-full px-2.5 text-xs font-medium text-ink-muted transition hover:bg-raised hover:text-ink;
+  }
+
+  .chip-active {
+    @apply bg-accent-soft text-accent hover:bg-accent-soft hover:text-accent;
+  }
+
+  .finding-row {
+    @apply py-3;
+  }
+
+  /* Blockers are the one thing on the review page that must not be missed. */
+  .finding-row-blocking {
+    @apply -mx-2 rounded-control bg-danger/5 px-2;
+  }
+
   .empty-copy {
     @apply mt-3 text-sm leading-6 text-ink-muted;
   }
 
   .meta-label {
-    @apply text-[11px] font-medium uppercase tracking-[0.08em] text-ink-faint;
+    @apply text-xs font-medium tracking-[0.04em] text-ink-faint;
   }
 
   /* Status, severity, and very short state words keep the pill shape -- they
      read as a state, not as a container. Nothing else does. */
   .tag {
-    @apply inline-flex items-center gap-1.5 rounded-full border border-line px-2 py-0.5 text-[11px] font-medium text-ink-muted;
+    @apply inline-flex items-center gap-1.5 rounded-full border border-line px-2 py-0.5 text-xs font-medium text-ink-muted;
   }
 }
 .prd-markdown {
-  color: #cdd5df;
-  font-size: 0.95rem;
-  line-height: 1.8;
+  color: #d3dae3;
+  font-size: 1rem;
+  line-height: 1.75;
   overflow-wrap: anywhere;
+}
+
+.prd-markdown li + li {
+  margin-top: 0.25rem;
+}
+
+.prd-markdown strong {
+  color: var(--color-ink);
+  font-weight: 600;
 }
 
 .prd-markdown h1,
@@ -136,7 +179,7 @@ body {
   color: var(--color-ink);
   font-weight: 650;
   line-height: 1.3;
-  scroll-margin-top: 1rem;
+  scroll-margin-top: 1.5rem;
 }
 
 .prd-markdown h1 {
@@ -232,6 +275,11 @@ body {
   background: var(--color-raised);
   color: var(--color-ink);
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.prd-markdown tbody tr:nth-child(even) td {
+  background: rgb(255 255 255 / 2%);
 }
 
 .prd-markdown hr {

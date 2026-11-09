@@ -1,0 +1,4 @@
+# Inherit the repository's Ruff settings; treat both the product (backend) and
+# this package as first-party so their imports sort together.
+extend = "../pyproject.toml"
+src = [".."]

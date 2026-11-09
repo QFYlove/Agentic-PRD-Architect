@@ -17,6 +17,7 @@ import {
 import { localizedErrorMessage } from "../lib/errorMessages";
 import type {
   CreateRunRequest,
+  RecoveryMode,
   ResumeRunRequest,
   RunEventType,
   RunSummary,
@@ -80,6 +81,8 @@ export interface AgentRunController {
   resume(userOverride?: string): Promise<void>;
   cancel(): Promise<void>;
   retryConnection(): Promise<void>;
+  /** Start a new run derived from the current (finished) one, and open it. */
+  recover(mode: RecoveryMode): Promise<void>;
   newRun(): void;
   selectVersion(version: number): void;
   clearError(): void;
@@ -258,6 +261,31 @@ export function useAgentRun(
     [api, closeSource, eventSourceFactory, refreshConversations],
   );
 
+  /**
+   * The run's durable events, merged into the trace.
+   *
+   * SSE only delivers events after the snapshot's sequence, so a reopened run
+   * used to show an empty run record. History fills in everything before it;
+   * a failure here is not an error the reader needs to see -- the run summary
+   * is built from the snapshot and still renders.
+   */
+  const loadHistory = useCallback(
+    async (runId: string, session: number): Promise<void> => {
+      if (!api.getRunHistory) {
+        return;
+      }
+      try {
+        const history = await api.getRunHistory(runId);
+        if (mountedRef.current && session === sessionRef.current) {
+          dispatch({ type: "HISTORY_LOADED", runId, events: history.items });
+        }
+      } catch {
+        // Best effort: see above.
+      }
+    },
+    [api],
+  );
+
   const hydrate = useCallback(
     async (runId: string, session: number): Promise<void> => {
       try {
@@ -266,6 +294,7 @@ export function useAgentRun(
           return;
         }
         dispatch({ type: "SNAPSHOT_LOADED", snapshot });
+        void loadHistory(runId, session);
         void refreshConversations();
         if (isTerminalRunStatus(snapshot.status)) {
           dispatch({ type: "CONNECTION_CHANGED", connection: "closed" });
@@ -285,7 +314,7 @@ export function useAgentRun(
         });
       }
     },
-    [api, closeSource, connect, refreshConversations],
+    [api, closeSource, connect, loadHistory, refreshConversations],
   );
 
   useEffect(() => {
@@ -383,6 +412,37 @@ export function useAgentRun(
     await hydrate(state.runId, session);
   }, [closeSource, hydrate, state.runId]);
 
+  const recover = useCallback(
+    async (mode: RecoveryMode): Promise<void> => {
+      const sourceRunId = state.runId;
+      if (!sourceRunId || !api.recoverRun) {
+        return;
+      }
+      const session = ++sessionRef.current;
+      closeSource();
+      dispatch({ type: "CREATE_STARTED" });
+      try {
+        const created = await api.recoverRun(sourceRunId, mode);
+        if (!mountedRef.current || session !== sessionRef.current) {
+          return;
+        }
+        writeRunIdToUrl(created.run_id);
+        dispatch({ type: "RUN_SELECTED", runId: created.run_id });
+        void refreshConversations();
+        await hydrate(created.run_id, session);
+      } catch (error) {
+        if (mountedRef.current && session === sessionRef.current) {
+          // The source run is untouched; reopen it so the reader is not
+          // stranded on an empty page.
+          dispatch({ type: "RUN_SELECTED", runId: sourceRunId });
+          await hydrate(sourceRunId, session);
+          dispatch({ type: "ERROR", message: messageFromError(error) });
+        }
+      }
+    },
+    [api, closeSource, hydrate, refreshConversations, state.runId],
+  );
+
   const newRun = useCallback(() => {
     sessionRef.current += 1;
     closeSource();
@@ -404,6 +464,7 @@ export function useAgentRun(
       }),
     cancel: () => runControl("cancel"),
     retryConnection,
+    recover,
     newRun,
     selectVersion: (version: number) =>
       dispatch({ type: "VERSION_SELECTED", version }),

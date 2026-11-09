@@ -1,0 +1,35 @@
+id: CAL-07
+title: 合理但不同的设计选择不得判矛盾；只写"与题面不一致"的矛盾无效
+case_id: PQB-P04
+covers: [design_choice, generic_impact]
+document: |-
+  # 器材租赁 PRD
+  假设：恰好在约定取货时间前 24 小时取消的，视为"24 小时以上"，全额退还租金（待业务确认）。
+  假设：快递订单以预计发货时间作为约定取货时间（待确认）。
+  取货或签收后不支持取消，用户可按提前归还处理，未使用天数不退租金（待确认）。
+  支付后 30 分钟内门店未确认的，订单自动取消并全额退还已付款项。
+responses:
+  - fill: {verdict: covered, quote: 支付后 30 分钟内门店未确认的，订单自动取消并全额退还已付款项}
+    items:
+      C1: {verdict: covered, quote: 恰好在约定取货时间前 24 小时取消的，视为"24 小时以上"}
+      C2: {verdict: covered, quote: 快递订单以预计发货时间作为约定取货时间}
+      # The three marked assumptions are acceptable answers to C1, C2 and C6.
+      # A judge that prefers another answer and calls the C6 choice a
+      # contradiction, with only "与题面不一致" as its impact, is refused.
+      C6:
+        verdict: contradicted
+        contradiction_kind: general
+        quote: 取货或签收后不支持取消
+        behavior_impact: 与题面不一致
+        defect_key: no-cancel-after-pickup
+        rule_basis: [C6]
+reviews:
+  - name: auto
+    expect:
+      status: final
+      judgments:
+        C6: {verified: false, problem: impact_without_document_quote}
+      # Unverified judgments neither earn nor blame: no cap, R coverage full.
+      final_total: 100
+      correctness_caps: {final: [4]}
+      candidates: []

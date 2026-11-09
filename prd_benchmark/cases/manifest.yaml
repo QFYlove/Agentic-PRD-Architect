@@ -1,0 +1,51 @@
+# PRD Quality Benchmark - case manifest.
+# Hashes are filled when a case is frozen after human review; until then every
+# case is a draft and must not be used for an approved run. A case may be
+# frozen alone (freeze/<case_id>.yaml); the set itself stays draft.
+
+case_set: pilot
+case_set_version: v0.3
+status: draft # draft | frozen
+frozen_commit: null
+
+cases:
+  - id: PQB-P01
+    file: PQB-P01-article-favorites.yaml
+    category: simple_clear
+    status: draft
+    sha256: null
+  - id: PQB-P02
+    file: PQB-P02-support-smart-reply.yaml
+    category: ambiguous
+    status: draft
+    sha256: null
+  - id: PQB-P03
+    file: PQB-P03-procurement-approval.yaml
+    category: multi_role
+    status: draft
+    sha256: null
+  - id: PQB-P04
+    file: PQB-P04-camera-rental-lifecycle.yaml
+    category: lifecycle
+    status: draft
+    sha256: null
+  - id: PQB-P05
+    file: PQB-P05-multichannel-batch-listing.yaml
+    category: failure_retry_cancel
+    status: draft
+    sha256: null
+  - id: PQB-P06
+    file: PQB-P06-gym-class-booking.yaml
+    category: conflicting_constraints
+    status: draft
+    sha256: null
+  - id: PQB-P07
+    file: PQB-P07-recruiting-candidate-data.yaml
+    category: permission_retention
+    status: frozen # alone; freeze manifest in freeze/PQB-P07.yaml
+    sha256: "b1b709e8a1cee0c0b7e91a1f811f3150daff66fccff1fc2a9038be873b3257b6"
+  - id: PQB-P08
+    file: PQB-P08-onboarding-experiment.yaml
+    category: metrics_acceptance
+    status: draft
+    sha256: null

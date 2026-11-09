@@ -45,10 +45,11 @@ def language_directive(output_language: str) -> str:
     return (
         f"OUTPUT LANGUAGE: write every word you emit in {name}. "
         "This covers headings, prose, list items, and every string field of a "
-        "structured response -- summary, strengths, issue, recommendation, "
-        "objective, required_change, and target_section included. Never mix "
+        "structured response -- summary, strengths, title, problem, evidence, "
+        "user_impact, recommendation, rationale, note, objective, issue, reason, "
+        "required_change, expected_result, and section names included. Never mix "
         "another language into the same document or review. Leave code "
-        "identifiers, metric names, and proper nouns in their original form. "
-        "Enum values such as severity and priority stay in their exact English "
-        "form."
+        "identifiers, metric names, finding ids, dimension ids, and proper nouns "
+        "in their original form. Enum values such as severity, category, status, "
+        "change_type, and priority stay in their exact English form."
     )

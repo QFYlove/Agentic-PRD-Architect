@@ -14,10 +14,13 @@ import pytest
 
 from backend.language import DEFAULT_OUTPUT_LANGUAGE
 from backend.prd_document import PRD_COMPLETION_MARKER
+from backend.prd_quality import check_prd
 from backend.prompts import (
-    COMPOSITION_RULES,
+    COMPACT_GENERATOR_SYSTEM_PROMPT,
+    FACT_RULES,
     GENERATOR_SYSTEM_PROMPT,
     OPTIMIZER_SYSTEM_PROMPT,
+    STRUCTURE_RULES,
 )
 from backend.providers.base import ProviderTextEvent
 from backend.providers.mock import MockLLMProvider
@@ -74,7 +77,12 @@ async def test_recorded_time_never_exceeds_the_run_wall_clock() -> None:
 
 
 class TruncatedThenCompleteProvider(MockLLMProvider):
-    """The RPG run's shape: attempt 1 is cut off at the cap, attempt 2 works."""
+    """Attempt 1 is broken off by the service after being billed; attempt 2 works.
+
+    The RPG run's attempt 1 was cut off at the output cap. Cap truncations are no
+    longer retried (they cannot succeed unchanged), so the retried case here is a
+    service interruption -- the accounting question is identical.
+    """
 
     def __init__(self) -> None:
         super().__init__(delays_enabled=False)
@@ -96,7 +104,7 @@ class TruncatedThenCompleteProvider(MockLLMProvider):
             yield ProviderTextEvent(delta="# PRD\n\n## Scope\nCut", model="m")
             yield ProviderTextEvent(
                 model="m",
-                finish_reason="length",
+                finish_reason="insufficient_system_resource",
                 usage=TokenUsage(
                     input_tokens=500,
                     output_tokens=1700,
@@ -168,7 +176,8 @@ async def test_an_unreported_spend_stays_zero_rather_than_being_estimated() -> N
     generator = [t for t in result.node_timings if t.node == "generator"]
 
     assert result.status is RunStatus.FAILED
-    assert len(generator) == 2
+    # One attempt: a cap truncation is never re-sent unchanged.
+    assert len(generator) == 1
     assert all(not timing.succeeded for timing in generator)
     # A made-up token count is worse than an absent one.
     assert all(timing.output_tokens == 0 for timing in generator)
@@ -248,12 +257,27 @@ def test_no_prompt_leaks_provider_or_process_detail(prompt: str) -> None:
     assert "traceback" not in prompt.lower()
 
 
-def test_the_generator_is_told_to_write_a_document_not_a_checklist() -> None:
-    assert COMPOSITION_RULES in GENERATOR_SYSTEM_PROMPT
-    # Prose where reasoning lives, tables where dimensions live.
-    assert "Prose by default" in COMPOSITION_RULES
-    assert "GFM tables" in COMPOSITION_RULES
-    assert "| 功能 | 描述 | 优先级 | 验收标准 |" in COMPOSITION_RULES
+def test_the_generator_is_told_to_structure_rules_as_lists_and_tables() -> None:
+    """Replaces the old "Prose by default" contract.
+
+    Run 9fa59292 followed that rule to the letter: zero list lines in either
+    version, and 17 paragraphs over 300 characters by v2. The new rules keep short
+    prose for reasoning and put rules, flows and criteria where a reader can scan
+    them -- and the deterministic checker enforces the same limit it quotes.
+    """
+    assert STRUCTURE_RULES in GENERATOR_SYSTEM_PROMPT
+    assert "Prose by default" not in GENERATOR_SYSTEM_PROMPT
+    for rule in (
+        "Bullet lists for features, business rules",
+        "Numbered steps for user and system flows",
+        "GFM tables for anything with two or more attributes",
+        "Never write a paragraph longer than 300",
+        "（1）…（2）…（3）…",
+        "DEPTH BY PRIORITY",
+        "P2: future value and direction only",
+        "8. 假设与待确认事项",
+    ):
+        assert rule in STRUCTURE_RULES
     # The five allowed diagram types, and only those five.
     for diagram in (
         "flowchart",
@@ -262,14 +286,45 @@ def test_the_generator_is_told_to_write_a_document_not_a_checklist() -> None:
         "mindmap",
         "erDiagram",
     ):
-        assert diagram in COMPOSITION_RULES
+        assert diagram in STRUCTURE_RULES
     for forbidden in ("gantt", "pie", "gitGraph", "quadrantChart"):
-        assert forbidden not in COMPOSITION_RULES
+        assert forbidden not in STRUCTURE_RULES
+
+
+def test_the_generator_has_a_length_budget_and_a_compact_mode() -> None:
+    assert "LENGTH BUDGET" in GENERATOR_SYSTEM_PROMPT
+    assert "12,000-18,000" in GENERATOR_SYSTEM_PROMPT
+    assert "compact mode" in COMPACT_GENERATOR_SYSTEM_PROMPT
+    assert "7,000-11,000" in COMPACT_GENERATOR_SYSTEM_PROMPT
+    # A revision must be able to shrink the document.
+    for change in ("REMOVE", "CONSOLIDATE", "RETAIN", "affected_sections"):
+        assert change in GENERATOR_SYSTEM_PROMPT
+
+
+def test_the_generator_must_label_figures_and_never_invent_sources() -> None:
+    assert FACT_RULES in GENERATOR_SYSTEM_PROMPT
+    for label in ("[用户输入]", "[已验证事实]", "[假设]", "[建议]", "[待确认]"):
+        assert label in FACT_RULES
+    assert "内部试点" in FACT_RULES
+    assert (
+        "| 事项 | 类型 | 为什么需要 | 影响的决策 | 验证方式 | 阶段/负责人 |"
+        in FACT_RULES
+    )
+
+
+def test_a_wall_of_text_document_is_flagged_by_the_same_rules() -> None:
+    """The prompt and the checker agree on what a wall of text is."""
+    wall = "这是一段很长的说明文字，" * 40
+    report = check_prd(f"# PRD\n\n## 1. 产品概述\n{wall}\n")
+
+    assert report.long_paragraphs == 1
+    assert report.list_items == 0
+    assert any(issue.code == "long_paragraph" for issue in report.issues)
 
 
 def test_the_optimizer_may_not_ask_for_form_only_rewrites() -> None:
-    """Otherwise round two turns v1's paragraphs back into bullet lists."""
+    """A plan item changes content; it never reshapes a section for its own sake."""
     lowered = OPTIMIZER_SYSTEM_PROMPT.lower()
-    assert "bullet lists" in lowered
-    assert "flattened into prose" in lowered
-    assert "restructured for clarity" in lowered
+    assert "paragraphs become bullets" in lowered
+    assert "tables become prose" in lowered
+    assert "rewrite of the whole document" in lowered

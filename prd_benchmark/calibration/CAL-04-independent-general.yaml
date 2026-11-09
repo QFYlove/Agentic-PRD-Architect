@@ -1,0 +1,75 @@
+id: CAL-04
+title: 独立的一般性矛盾在否决后保留；只复述 H 违规的矛盾不计
+case_id: PQB-P03
+covers: [independent_general, dependent_general]
+document: |-
+  # 采购审批 PRD
+  所有申请先由直属主管审批，预估金额大于或等于 2 万元的再经财务审批。
+  审批人超过 72 小时未处理时自动通过。
+  被驳回的申请必须作废，不能修改后重新提交。
+  实际金额超出预估时无需重新审批，按原审批结果下单。
+responses:
+  - fill: {verdict: covered, quote: 所有申请先由直属主管审批}
+    items:
+      # Dependent: the general contradiction quotes only the H3 claim's text.
+      R8:
+        verdict: contradicted
+        contradiction_kind: general
+        quote: 审批人超过 72 小时未处理时自动通过
+        behavior_impact: 「审批人超过 72 小时未处理时自动通过」使超时申请绕过上报直接进入采购
+        defect_key: timeout-auto-approve
+        rule_basis: [R8]
+        hard_constraint_claim:
+          violated_constraint: H3
+          quotes: [审批人超过 72 小时未处理时自动通过]
+          behavior_impact: 「审批人超过 72 小时未处理时自动通过」会让无人审批的申请直接进入采购，而题面要求上报上级
+          defect_key: timeout-auto-approve
+      # Independent: H6 claim, plus a general contradiction on its own basis
+      # (C1 re-approval) with its own evidence.
+      R4:
+        verdict: partial
+        quote: 被驳回的申请必须作废，不能修改后重新提交
+        hard_constraint_claim:
+          violated_constraint: H6
+          quotes: [被驳回的申请必须作废，不能修改后重新提交]
+          behavior_impact: 「被驳回的申请必须作废，不能修改后重新提交」使申请人无法按题面修改重提，只能新建申请
+          defect_key: no-resubmit-after-reject
+      C2:
+        verdict: contradicted
+        contradiction_kind: general
+        quote: 实际金额超出预估时无需重新审批，按原审批结果下单
+        behavior_impact: 「实际金额超出预估时无需重新审批」把待澄清的重审规则写成既定决定，金额跨过阈值的采购会绕过财务或总经理
+        defect_key: no-reapproval-on-overrun
+        rule_basis: [C2]
+reviews:
+  # R weights 17. R8 (core) has a dependent general contradiction that does not
+  # count (unverified -> credit 0); R4 (core) partial.
+  - name: pending
+    expect:
+      status: pending
+      final_total: null
+      judgments:
+        R8: {verified: false, problem: depends_on_hard_claim}
+        C2: {verified: true}
+      counts: {valid_claims: 2}
+      # base: R8 loses 2, R4 loses 1 -> 25 x 14/17 = 20.5882; one general (C2,
+      # a clarification) -> cap 3 -> 15; dims 55 -> 90.5882.
+      base_total: 90.5882
+      # both confirmed: R4 also credit 0 -> 25 x 13/17 = 19.1176; cap 1 -> 5.
+      if_confirmed_total: 79.1176
+      if_rejected_total: 90.5882
+      general_contradictions: {base: [1], if_confirmed: [1]}
+      candidates:
+        - {rule_id: G1, violated_constraint: H3, decision: pending}
+        - {rule_id: G1, violated_constraint: H6, decision: pending}
+  - name: both-rejected
+    human:
+      decisions:
+        - {claim: [H3, timeout-auto-approve], decision: rejected}
+        - {claim: [H6, no-resubmit-after-reject], decision: rejected}
+    expect:
+      # The C2 contradiction has its own basis and evidence: it survives.
+      status: final
+      final_total: 90.5882
+      correctness_caps: {final: [3]}
+      general_contradictions: {final: [1]}

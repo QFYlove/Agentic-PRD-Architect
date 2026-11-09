@@ -1,0 +1,140 @@
+id: PQB-P01
+title: 技术阅读平台文章收藏
+category: simple_clear # 明确的简单功能需求
+case_version: v0.3 # v0.3: H quotes verbatim; H3 restated close to the input
+status: draft # draft | frozen
+
+# Only these three fields are sent to the system under test (both conditions).
+frozen_input:
+  user_idea: |-
+    为技术阅读平台增加文章收藏功能。登录用户可以在文章详情页一键收藏或取消收藏；可以创建最多 20 个自定义收藏夹，并对收藏夹重命名、删除；一篇文章可以同时放入多个收藏夹。"我的收藏"页按收藏时间倒序展示，支持按收藏夹筛选和按文章标题关键词搜索。文章被作者下架后，收藏记录保留，列表中显示"已下架"且不可打开。
+  target_audience: |-
+    平台已登录读者，使用 Web、iOS、Android 三端。
+  user_constraints: |-
+    每个用户最多 5000 条收藏；未登录用户点击收藏时跳转登录，登录后自动完成原来的收藏操作；收藏状态需要在 Web 与 App 之间同步；首期不做收藏夹分享和公开。
+
+evaluator_context: |-
+  信息基本完整的简单需求，主要考察覆盖完整性与边界规则，而不是澄清能力。
+  题面留有三处需要定义的细节：一键收藏进入哪个收藏夹、多收藏夹下"取消收藏"的作用范围、
+  删除收藏夹时其中收藏的去向。这些可以作为标注过的假设处理，不要求提问。
+
+# Explicit, checkable constraints stated in frozen_input. Each quote must appear
+# verbatim in the frozen input. A judge may label a contradiction as a
+# hard-constraint violation only by citing one of these ids.
+hard_constraints:
+  - id: H1
+    text: 自定义收藏夹最多 20 个
+    quote: 可以创建最多 20 个自定义收藏夹
+  - id: H2
+    text: 每个用户最多 5000 条收藏
+    quote: 每个用户最多 5000 条收藏
+  - id: H3
+    text: 未登录用户点击收藏时跳转登录，登录后自动完成原来的收藏操作
+    quote: 未登录用户点击收藏时跳转登录，登录后自动完成原来的收藏操作
+  - id: H4
+    text: 收藏状态需要在 Web 与 App 之间同步
+    quote: 收藏状态需要在 Web 与 App 之间同步
+  - id: H5
+    text: 首期不做收藏夹分享和公开
+    quote: 首期不做收藏夹分享和公开
+  - id: H6
+    text: 文章被作者下架后，收藏记录保留，列表中显示"已下架"且不可打开
+    quote: 文章被作者下架后，收藏记录保留，列表中显示"已下架"且不可打开
+
+required_items:
+  - id: R1
+    text: 详情页收藏与取消收藏，重复操作幂等
+    source: E
+    core: true
+    impact: 核心功能本身没有定义，无法实现
+    check: 写明收藏和取消收藏的入口与结果；重复点击不产生重复记录（明确写出或由"状态切换"语义可直接推出）
+  - id: R2
+    text: 未登录点击收藏 → 跳转登录 → 登录后自动完成原收藏
+    source: E
+    core: true
+    impact: 实现方大概率只做"跳转登录"，用户登录后原操作丢失，题面明确要求的衔接流程落空
+    check: 三步都要有；只写"需登录"为 partial
+  - id: R3
+    text: 自定义收藏夹的创建、重命名、删除，上限 20 个
+    source: E
+    core: false
+    check: 三个操作 + 上限 20；缺上限为 partial。达到 20 个时的提示不作要求
+  - id: R4
+    text: 一篇文章可同时属于多个收藏夹
+    source: E
+    core: false
+    check: 明确多对多关系
+  - id: R5
+    text: 我的收藏按收藏时间倒序展示
+    source: E
+    core: false
+    check: 排序规则明确
+  - id: R6
+    text: 按收藏夹筛选
+    source: E
+    core: false
+    check: 存在筛选能力
+  - id: R7
+    text: 按文章标题关键词搜索
+    source: E
+    core: false
+    check: 搜索范围为标题；扩展到正文需标注为假设或扩展，否则计入范围蔓延
+  - id: R8
+    text: 下架文章保留收藏记录、显示"已下架"、不可打开
+    source: E
+    core: true
+    impact: 已下架文章可能仍能通过收藏打开（内容合规风险），或收藏记录随下架被误删
+    check: 三点都要有
+  - id: R9
+    text: 总收藏 5000 条上限，以及达到上限后的系统行为与提示
+    source: ED
+    core: true
+    impact: 不写上限，上限会被突破（违反 H2）；不写达到上限后的行为，该边界无法实现和测试
+    rationale: 上限是题面给定的；达到上限后的行为题面未给，但不定义则无法实现和测试
+    check: 只写上限数字、不写达到上限时如何处理为 partial；处理方式本身（阻止或提示清理）任选，标注为假设即可
+  - id: R10
+    text: Web 与 App 之间的收藏状态同步
+    source: E
+    core: false
+    check: 写明同步范围；同步时效可作为假设
+  - id: R11
+    text: 删除收藏夹时，其中收藏的处理规则
+    source: D
+    core: false
+    rationale: 题面允许删除收藏夹且文章可属于多个收藏夹；不定义会导致数据丢失或孤儿记录，实现必然分歧
+    check: 明确是"仅移出该夹"还是"一并取消收藏"，或标注为待确认
+  - id: R12
+    text: 收藏夹分享和公开明确排除在首期范围之外
+    source: E
+    core: false
+    check: 非目标或范围章节中写明
+
+clarifications:
+  - id: C1
+    question: 一键收藏时文章进入哪个收藏夹（默认收藏夹、弹窗选择或其他）
+    core: false
+    accept: 提出问题，或明确标注为假设的设定（如"假设存在默认收藏夹"）
+  - id: C2
+    question: 文章在多个收藏夹中时，详情页"取消收藏"是从全部收藏夹移除还是仅从某一个移除
+    core: false
+    accept: 同上
+
+acceptable_assumptions:
+  - 存在一个系统默认收藏夹（需标注为假设）
+  - 跨端同步为秒级最终一致
+  - 下架文章是否计入 5000 条上限，任选其一并写明
+  - 收藏时间指首次收藏该文章的时间，或加入当前筛选收藏夹的时间（二选一并写明）
+
+critical_defects:
+  - id: P01-X1
+    condition: 首期范围包含收藏夹分享或公开
+  - id: P01-X2
+    condition: 下架文章在收藏列表中仍可打开阅读
+  - id: P01-X3
+    condition: 设计上允许单个用户超过 5000 条收藏（仅遗漏上限不属于此项，按 R9 覆盖率处理）
+  - id: P01-X4
+    condition: 未登录用户可以直接收藏（不经登录）
+
+judge_notes: |-
+  收藏夹默认/取消范围/删除去向三处是题面有意留下的空白，任何一种合理处理只要写明即可，不按"是否与评测者偏好一致"判定。
+  不要求设计推荐、排序算法、收藏数统计等题面未提的功能；若写入且未标注为扩展，按范围蔓延在正确性维度考虑。

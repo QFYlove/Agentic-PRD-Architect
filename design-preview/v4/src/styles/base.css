@@ -1,0 +1,358 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: var(--fs);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p,
+ol,
+ul,
+blockquote {
+  margin: 0;
+  padding: 0;
+}
+
+ol,
+ul {
+  list-style: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.quiet {
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+}
+
+/* Small uppercase-style section label. Used sparingly. */
+.label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+
+.icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--r);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background var(--t) var(--ease),
+    color var(--t) var(--ease),
+    box-shadow var(--t) var(--ease);
+}
+
+.btn--primary {
+  background: var(--ink);
+  color: var(--surface);
+  padding: 0 16px;
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: #000;
+}
+
+.btn--primary .icon {
+  transition: transform var(--t) var(--ease);
+}
+
+.btn--primary:hover:not(:disabled) .icon {
+  transform: translateX(2px);
+}
+
+.btn--primary:disabled {
+  background: var(--line-2);
+  color: var(--surface);
+}
+
+.btn--ghost {
+  box-shadow: inset 0 0 0 1px var(--line-2);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.btn--small {
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--fs-xs);
+  background: var(--ink);
+  color: var(--surface);
+}
+
+.btn--small:hover:not(:disabled) {
+  background: #000;
+}
+
+.btn--small:disabled {
+  background: var(--line-2);
+}
+
+.btn--ghost.btn--small {
+  background: transparent;
+  color: var(--ink);
+}
+
+.btn--ghost.btn--small:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.btn--text {
+  height: auto;
+  padding: 4px 6px;
+  color: var(--ink-2);
+  font-weight: 400;
+}
+
+.btn--text:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+.btn--toggle {
+  color: var(--ink-2);
+}
+
+.btn--toggle:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.btn--toggle.is-on {
+  background: var(--select);
+  color: var(--ink);
+}
+
+.icon-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--r);
+  color: var(--ink-2);
+  flex: none;
+  transition: background var(--t) var(--ease);
+}
+
+.icon-btn:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+.icon-btn.is-on {
+  background: var(--select);
+  color: var(--ink);
+}
+
+.icon-btn--small {
+  width: 26px;
+  height: 26px;
+}
+
+.dots {
+  font-size: 14px;
+  line-height: 1;
+  letter-spacing: 1px;
+}
+
+/* Count bubble. Accent means "needs you"; quiet means "for information". */
+.count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.count--quiet {
+  background: var(--line-2);
+  color: var(--ink);
+}
+
+/* Segmented control */
+.seg,
+.tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--hover);
+}
+
+.seg button,
+.tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--r);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  white-space: nowrap;
+  transition:
+    background var(--t) var(--ease),
+    color var(--t) var(--ease);
+}
+
+.seg button[aria-selected="true"],
+.tabs button[aria-checked="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 500;
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+/* Text fields: soft fill, no frame until focused. */
+.field {
+  width: 100%;
+  resize: vertical;
+  border: 0;
+  border-radius: var(--r);
+  background: var(--bg);
+  padding: 10px 12px;
+  font-size: var(--fs);
+  line-height: 1.6;
+  box-shadow: inset 0 0 0 1px var(--line);
+  transition:
+    box-shadow var(--t) var(--ease),
+    background var(--t) var(--ease);
+}
+
+.field:focus {
+  outline: none;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+
+.field--small {
+  font-size: var(--fs-sm);
+  padding: 8px 10px;
+}
+
+.field--source {
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.75;
+}
+
+.more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 4px 6px 4px 2px;
+  border-radius: var(--r);
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+
+.more:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+/* Calm empty state: a single small geometric mark and a sentence. */
+.calm {
+  padding: 40px 8px;
+  text-align: center;
+  color: var(--ink-2);
+  font-size: var(--fs-sm);
+}
+
+.calm__mark {
+  display: block;
+  width: 20px;
+  height: 20px;
+  margin: 0 auto 14px;
+  background: var(--ink);
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+.calm .quiet {
+  margin-top: 4px;
+}

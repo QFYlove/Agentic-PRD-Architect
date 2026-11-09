@@ -1,6 +1,7 @@
 import {
   isRunStatus,
   parseErrorResponse,
+  parseRunEvent,
   parseRunListResponse,
   parseRunSnapshot,
 } from "./contracts";
@@ -9,7 +10,9 @@ import type {
   ControlResponse,
   CreateRunRequest,
   CreateRunResponse,
+  RecoveryMode,
   ResumeRunRequest,
+  RunHistoryResponse,
   RunListResponse,
   RunSnapshot,
   RunStatus,
@@ -42,6 +45,10 @@ export interface AgentApi {
   pauseRun(runId: string): Promise<ControlResponse>;
   resumeRun(runId: string, request: ResumeRunRequest): Promise<ControlResponse>;
   cancelRun(runId: string): Promise<ControlResponse>;
+  /** Starts a new run derived from a finished one. Optional for test doubles. */
+  recoverRun?(runId: string, mode: RecoveryMode): Promise<CreateRunResponse>;
+  /** Durable events of a run, for replaying a finished run's record. */
+  getRunHistory?(runId: string): Promise<RunHistoryResponse>;
   health(): Promise<HealthResponse>;
   eventsUrl(runId: string, afterSequence: number): string;
 }
@@ -79,6 +86,13 @@ function parseControlResponse(value: unknown): ControlResponse {
   return value as unknown as ControlResponse;
 }
 
+function parseRunHistory(value: unknown): RunHistoryResponse {
+  if (!isRecord(value) || !Array.isArray(value.items)) {
+    throw new TypeError("Invalid run history");
+  }
+  return { items: value.items.map(parseRunEvent) };
+}
+
 function parseHealthResponse(value: unknown): HealthResponse {
   if (
     !isRecord(value) ||
@@ -93,7 +107,11 @@ function parseHealthResponse(value: unknown): HealthResponse {
 
 export class HttpAgentApi implements AgentApi {
   getProviders(): Promise<ProviderCatalog> {
-    return this.request("/api/providers", undefined, (value) => value as ProviderCatalog);
+    return this.request(
+      "/api/providers",
+      undefined,
+      (value) => value as ProviderCatalog,
+    );
   }
   readonly baseUrl: string;
 
@@ -155,6 +173,22 @@ export class HttpAgentApi implements AgentApi {
       `/api/runs/${encodeURIComponent(runId)}/cancel`,
       { method: "POST" },
       parseControlResponse,
+    );
+  }
+
+  recoverRun(runId: string, mode: RecoveryMode): Promise<CreateRunResponse> {
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/recover`,
+      { method: "POST", body: JSON.stringify({ mode }) },
+      parseCreateRunResponse,
+    );
+  }
+
+  getRunHistory(runId: string): Promise<RunHistoryResponse> {
+    return this.request(
+      `/api/runs/${encodeURIComponent(runId)}/history`,
+      undefined,
+      parseRunHistory,
     );
   }
 

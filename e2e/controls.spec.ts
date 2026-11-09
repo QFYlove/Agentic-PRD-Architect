@@ -90,7 +90,7 @@ for (const stage of ["generation", "review"] as const) {
       expect(version.content).toContain(
         "# Product Requirements Document — Version 1",
       );
-      expect(version.content).toContain("## Acceptance Criteria");
+      expect(version.content).toContain("## 8. Assumptions and Open Questions");
       expect(version.revision_plan).toBeNull();
     }
     if (stage === "generation") {

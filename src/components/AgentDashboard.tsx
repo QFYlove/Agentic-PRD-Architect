@@ -1,21 +1,28 @@
 import { AlertCircle, Boxes, RefreshCw } from "lucide-react";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { useAgentRun, type UseAgentRunOptions } from "../hooks/useAgentRun";
 import { useProviderCatalog } from "../hooks/useProviderCatalog";
 import { failureNotice } from "../lib/failureNotice";
 import { outcomeSummary } from "../lib/outcomeSummary";
-import type { ConnectionStatus, VersionScore } from "../lib/runReducer";
+import { locateSection, parseOutline } from "../lib/prdOutline";
+import {
+  isUsableDraft,
+  type ConnectionStatus,
+  type VersionScore,
+} from "../lib/runReducer";
 import { isTerminalRunStatus } from "../lib/types";
-import { AgentTrace } from "./AgentTrace";
 import { ConversationSidebar } from "./ConversationSidebar";
+import { FailurePanel } from "./FailurePanel";
 import { OutcomePanel } from "./OutcomePanel";
 import { ProductIdeaForm } from "./ProductIdeaForm";
+import { scrollToHeading } from "./PRDViewer";
 import { RevisionPlanPanel } from "./RevisionPlanPanel";
-import { ReviewPanel } from "./ReviewPanel";
+import { FindingsSidebar, ReviewPanel } from "./ReviewPanel";
 import { RunControls } from "./RunControls";
+import { RunRequest } from "./RunRequest";
+import { RunTimeline } from "./RunTimeline";
 import { RUN_STATUS_LABELS, StatusBadge } from "./StatusBadge";
-import { TelemetryPanel } from "./TelemetryPanel";
 import { VersionRail } from "./VersionRail";
 import { WorkspaceTabs, type WorkspaceTab } from "./WorkspaceTabs";
 
@@ -24,16 +31,6 @@ const PRDViewer = lazy(() =>
 );
 const VersionDiff = lazy(() =>
   import("./VersionDiff").then((module) => ({ default: module.VersionDiff })),
-);
-const RadarScoreChart = lazy(() =>
-  import("./RadarScoreChart").then((module) => ({
-    default: module.RadarScoreChart,
-  })),
-);
-const WorkflowDiagram = lazy(() =>
-  import("./WorkflowDiagram").then((module) => ({
-    default: module.WorkflowDiagram,
-  })),
 );
 
 const CONNECTION_LABELS: Record<ConnectionStatus, string> = {
@@ -69,11 +66,14 @@ function previousVersionOf(
   return earlier.at(-1) ?? null;
 }
 
-/** Only complete versions can be compared; a streaming draft has no final text. */
+/**
+ * Only finished versions can be compared; a streaming or interrupted draft has
+ * no final text.
+ */
 function comparableContent(
-  draft: { content: string; complete: boolean } | undefined,
+  draft: Parameters<typeof isUsableDraft>[0],
 ): string | null {
-  return draft && draft.complete && draft.content !== "" ? draft.content : null;
+  return draft && isUsableDraft(draft) ? draft.content : null;
 }
 
 function scoreBadge(score: VersionScore | undefined): string | undefined {
@@ -91,6 +91,14 @@ export function AgentDashboard({
   const snapshot = state.snapshot;
   const catalog = useProviderCatalog(api ?? undefined);
   const [requestedTab, setRequestedTab] = useState("prd");
+  /** A heading to scroll to once the PRD tab has rendered. */
+  const [pendingHeading, setPendingHeading] = useState<string | null>(null);
+  useEffect(() => {
+    if (pendingHeading !== null && requestedTab === "prd") {
+      scrollToHeading(pendingHeading);
+      setPendingHeading(null);
+    }
+  }, [pendingHeading, requestedTab]);
 
   const versions = Object.keys(state.drafts)
     .map(Number)
@@ -104,7 +112,27 @@ export function AgentDashboard({
     selected === null
       ? undefined
       : state.revisionPlansBySourceVersion[selected];
-  const previous = previousVersionOf(versions, selected);
+  const finished = versions.filter((version) =>
+    isUsableDraft(state.drafts[version]),
+  );
+  const previous = previousVersionOf(finished, selected);
+  const findings =
+    selected === null ? undefined : state.findingsByVersion[selected];
+  const quality =
+    selected === null ? undefined : state.qualityByVersion[selected];
+  const nextVersion = plan === undefined ? undefined : plan.targetVersion;
+  const nextResolutions =
+    nextVersion === undefined
+      ? []
+      : (state.findingsByVersion[nextVersion]?.resolutions ?? []);
+  function locate(section: string): void {
+    if (!draft || !isUsableDraft(draft)) {
+      return;
+    }
+    const heading = locateSection(parseOutline(draft.content), section);
+    setRequestedTab("prd");
+    setPendingHeading(heading?.id ?? null);
+  }
   const previousReviews =
     previous === null ? undefined : state.reviewsByVersion[previous];
   const sourceContent =
@@ -141,7 +169,21 @@ export function AgentDashboard({
           badge: scoreBadge(score),
           panel: (
             <Suspense fallback={<ModuleFallback label="PRD 文档" />}>
-              <PRDViewer runId={snapshot.run_id} draft={draft} score={score} />
+              <PRDViewer
+                runId={snapshot.run_id}
+                draft={draft}
+                score={score}
+                quality={quality}
+                aside={
+                  reviews ? (
+                    <FindingsSidebar
+                      reviews={reviews}
+                      findings={findings}
+                      onLocate={locate}
+                    />
+                  ) : undefined
+                }
+              />
             </Suspense>
           ),
         },
@@ -157,6 +199,10 @@ export function AgentDashboard({
               previousReviews={previousReviews}
               previousVersion={previous}
               severity={score?.severity}
+              findings={findings}
+              overall={score?.overall}
+              qualityThreshold={snapshot.quality_threshold}
+              onLocate={locate}
             />
           ),
         },
@@ -165,7 +211,9 @@ export function AgentDashboard({
           label: "修订计划",
           badge: plan ? String(plan.plan.items.length) : undefined,
           disabled: plan === undefined,
-          panel: <RevisionPlanPanel entry={plan} />,
+          panel: (
+            <RevisionPlanPanel entry={plan} resolutions={nextResolutions} />
+          ),
         },
         {
           id: "diff",
@@ -193,23 +241,9 @@ export function AgentDashboard({
         {
           id: "trace",
           label: "运行记录",
-          badge:
-            state.events.length > 0 ? String(state.events.length) : undefined,
-          panel: (
-            <div className="grid min-w-0 gap-4 xl:grid-cols-2">
-              <Suspense fallback={<ModuleFallback label="工作流" />}>
-                <WorkflowDiagram
-                  statuses={snapshot.node_statuses}
-                  runStatus={state.status ?? snapshot.status}
-                />
-              </Suspense>
-              <AgentTrace events={state.events} />
-              <Suspense fallback={<ModuleFallback label="评分" />}>
-                <RadarScoreChart scores={state.scoresByVersion} />
-              </Suspense>
-              <TelemetryPanel snapshot={snapshot} />
-            </div>
-          ),
+          // No count: the old badge counted every event, including the
+          // thousands of deltas the panel never shows.
+          panel: <RunTimeline state={state} />,
         },
       ]
     : [];
@@ -261,7 +295,9 @@ export function AgentDashboard({
                   : "可以开始新任务"}
             </div>
 
-            {state.error && (
+            {/* A run failure's cause is in the failure panel; the banner is for
+                everything else (a recovery request that failed, a lost connection). */}
+            {state.error && state.error !== failure?.reason && (
               <div
                 className="mb-4 flex flex-wrap items-start gap-3 rounded-panel border border-line bg-surface px-4 py-3 text-sm text-ink"
                 role="alert"
@@ -321,7 +357,10 @@ export function AgentDashboard({
                 <ProductIdeaForm
                   isSubmitting={state.isCreating}
                   onSubmit={controller.createRun}
-                  providers={catalog.providers} catalogState={catalog.state} catalogError={catalog.error} onRetryCatalog={catalog.retry}
+                  providers={catalog.providers}
+                  catalogState={catalog.state}
+                  catalogError={catalog.error}
+                  onRetryCatalog={catalog.retry}
                 />
               </section>
             ) : !snapshot || !state.status ? (
@@ -343,75 +382,65 @@ export function AgentDashboard({
                     being read. Mobile order is outcome -> version -> document,
                     so the opening screen answers "is this done and which
                     version am I looking at" before anything else. */}
-                <section className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                    <StatusBadge status={state.status} />
-                    <span
-                      className="inline-flex items-center gap-1.5 text-xs text-ink-faint"
-                      data-testid="connection-status"
-                    >
-                      <span
-                        aria-hidden="true"
-                        className={`h-1.5 w-1.5 rounded-full ${
-                          state.connection === "open" ? "bg-ok" : "bg-warn"
-                        }`}
-                      />
-                      连接：{CONNECTION_LABELS[state.connection]}
-                    </span>
-                    {state.connection !== "open" &&
-                      !isTerminalRunStatus(state.status) && (
-                        <button
-                          className="inline-flex items-center gap-1 text-xs font-medium text-accent underline underline-offset-4"
-                          type="button"
-                          data-testid="reconnect"
-                          onClick={() => void controller.retryConnection()}
+                <section className="min-w-0 space-y-4">
+                  <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+                    <RunRequest snapshot={snapshot} />
+                    <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
+                      <StatusBadge status={state.status} />
+                      {!isTerminalRunStatus(state.status) && (
+                        <span
+                          className="inline-flex items-center gap-1.5 text-xs text-ink-faint"
+                          data-testid="connection-status"
                         >
-                          <RefreshCw aria-hidden="true" size={12} />
-                          重新连接
-                        </button>
+                          <span
+                            aria-hidden="true"
+                            className={`h-1.5 w-1.5 rounded-full ${
+                              state.connection === "open" ? "bg-ok" : "bg-warn"
+                            }`}
+                          />
+                          {CONNECTION_LABELS[state.connection]}
+                        </span>
                       )}
+                      {isTerminalRunStatus(state.status) && (
+                        <span
+                          className="sr-only"
+                          data-testid="connection-status"
+                        >
+                          连接：{CONNECTION_LABELS[state.connection]}
+                        </span>
+                      )}
+                      {state.connection !== "open" &&
+                        !isTerminalRunStatus(state.status) && (
+                          <button
+                            className="inline-flex items-center gap-1 text-xs font-medium text-accent underline underline-offset-4"
+                            type="button"
+                            data-testid="reconnect"
+                            onClick={() => void controller.retryConnection()}
+                          >
+                            <RefreshCw aria-hidden="true" size={12} />
+                            重新连接
+                          </button>
+                        )}
+                    </div>
                   </div>
-                  <p className="mt-3 max-w-reading text-sm leading-6 text-ink">
-                    {snapshot.user_idea}
-                  </p>
-                  <p className="mt-1 font-mono text-[10px] text-ink-faint">
-                    任务 {snapshot.run_id}
-                  </p>
-                  {state.outcome && (
-                    <div className="mt-4">
-                      <OutcomePanel outcome={state.outcome} />
-                    </div>
-                  )}
+                  {state.outcome && <OutcomePanel outcome={state.outcome} />}
                   {failure && (
-                    <div
-                      className="mt-4 border-l-2 border-l-danger pl-3"
-                      data-testid="failure-notice"
-                    >
-                      <p className="flex items-center gap-1.5 text-sm font-semibold text-danger">
-                        <AlertCircle
-                          aria-hidden="true"
-                          size={15}
-                          className="shrink-0"
-                        />
-                        <span className="min-w-0">{failure.headline}</span>
-                      </p>
-                      {failure.detail !== null && (
-                        <p
-                          className="mt-1 text-xs leading-5 text-ink-muted"
-                          data-testid="failure-notice-detail"
-                        >
-                          {failure.detail}
-                        </p>
-                      )}
-                    </div>
+                    <FailurePanel
+                      notice={failure}
+                      busy={state.isCreating}
+                      onRecover={(mode) => void controller.recover(mode)}
+                    />
                   )}
                   {versions.length > 0 && (
-                    <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       <VersionRail
                         versions={versions}
                         scores={state.scoresByVersion}
                         selectedVersion={selected}
                         bestVersion={state.bestVersion}
+                        interrupted={versions.filter(
+                          (version) => state.drafts[version]?.interrupted,
+                        )}
                         onSelectVersion={controller.selectVersion}
                       />
                       <span className="meta-label">

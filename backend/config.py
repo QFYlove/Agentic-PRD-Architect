@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     reviewer_timeout_seconds: int = Field(default=45, ge=1)
     optimizer_timeout_seconds: int = Field(default=60, ge=1)
     run_timeout_seconds: int = Field(default=600, ge=10)
+    provider_retry_base_delay_seconds: float = Field(default=1.0, ge=0, le=30)
+    """First backoff before retrying a transient provider failure; doubles after.
+
+    A ``Retry-After`` from the provider takes precedence. Only transient failures
+    are retried at all -- see ``backend.failures``.
+    """
 
     @field_validator("frontend_origins", mode="before")
     @classmethod

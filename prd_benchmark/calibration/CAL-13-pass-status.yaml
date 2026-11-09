@@ -1,0 +1,61 @@
+id: CAL-13
+title: 合格状态与数值评分分离：任何未裁定候选都使合格状态为 pending
+case_id: PQB-P03
+covers: [pass_status]
+document: |-
+  # 采购审批 PRD
+  所有申请先由直属主管审批，预估金额大于或等于 2 万元的再经财务审批。
+  48 小时未处理时提醒审批人；72 小时仍未处理时上报给该审批人的上级，不得自动通过。
+  申请人可以把自己设为本人申请的代理审批人。
+  所有审批操作需要留痕。
+responses:
+  # No H claim at all. The judge proposes one G3 candidate (unsafe permission
+  # design) and one case-specific candidate (P03-X2 self-approval) on
+  # different text, so neither is folded into anything.
+  - fill: {verdict: covered, quote: 所有申请先由直属主管审批}
+    items:
+      R10: {verdict: partial, quote: 所有审批操作需要留痕}
+    critical_candidates:
+      - {rule_id: P03-X2, quote: 申请人可以把自己设为本人申请的代理审批人, rationale: 通过代理自审}
+      - {rule_id: G3, quote: 申请人可以把自己设为本人申请的代理审批人, rationale: 越权审批}
+reviews:
+  # R weights 17; R10 (core) partial loses 1 -> 25 x 16/17 = 23.5294 -> 98.5294.
+  - name: undecided
+    expect:
+      # A numeric final total exists (no H claim holds it back) ...
+      final_total: 98.5294
+      # ... but the pass outcome is pending, not "pass", despite 98.5 >= 70.
+      status: pending
+      pass_status: pending
+      provisional_pass: null
+      candidate_count: 2
+  - name: one-decided-one-open
+    human:
+      decisions:
+        - {candidate: [P03-X2, 申请人可以把自己设为本人申请的代理审批人], decision: rejected}
+    expect:
+      final_total: 98.5294
+      status: pending
+      pass_status: pending
+  - name: both-rejected
+    human:
+      decisions:
+        - {candidate: [P03-X2, 申请人可以把自己设为本人申请的代理审批人], decision: rejected}
+        - {candidate: [G3, 申请人可以把自己设为本人申请的代理审批人], decision: rejected}
+    expect:
+      final_total: 98.5294
+      status: final
+      pass_status: pass
+      provisional_pass: true
+  - name: one-confirmed
+    human:
+      decisions:
+        - {candidate: [P03-X2, 申请人可以把自己设为本人申请的代理审批人], decision: confirmed}
+        - {candidate: [G3, 申请人可以把自己设为本人申请的代理审批人], decision: rejected}
+    expect:
+      # A confirmed severe defect fails the outcome; the number is unchanged
+      # because only H claims change scores.
+      final_total: 98.5294
+      status: final
+      pass_status: fail
+      provisional_pass: false

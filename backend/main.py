@@ -31,6 +31,7 @@ from backend.providers.base import LLMProvider
 from backend.providers.compatible import OpenAICompatibleLLMProvider
 from backend.providers.mock import MockLLMProvider
 from backend.providers.scenario import ScenarioController, ScenarioMockLLMProvider
+from backend.rubric import rubric_document
 from backend.run_manager import RunManager
 from backend.run_store import InMemoryRunStore, SQLiteRunStore
 from backend.schemas import (
@@ -42,14 +43,21 @@ from backend.schemas import (
     EvaluationResult,
     HealthResponse,
     PRDVersion,
+    RecoverRunRequest,
     ResumeRunRequest,
     RevisionPlan,
     RoleReview,
     RunEvent,
+    RunHistoryResponse,
     RunListResponse,
     RunSnapshot,
     RunSummary,
 )
+from backend.v3.api import build_router as build_v3_router
+from backend.v3.jobs import JobManager
+from backend.v3.llm import CompatibleGateway, ModelGateway
+from backend.v3.mock import MockGateway
+from backend.v3.store import ProjectStore
 from backend.workflow import AgentWorkflow
 
 LOGGER = logging.getLogger("agentic_prd.api")
@@ -225,13 +233,36 @@ def create_app(
     )
     manager.set_workflow(AgentWorkflow(manager))
 
+    # V3 projects: separate tables in the same SQLite file, never touched by
+    # the run TTL or retention limit.
+    project_store = ProjectStore(app_settings.database_path)
+    gateway: ModelGateway
+    if isinstance(provider, OpenAICompatibleLLMProvider):
+        gateway = CompatibleGateway(provider)
+    else:
+        delays = app_settings.mock_delays_enabled
+        gateway = MockGateway(
+            delay=app_settings.mock_reviewer_delay_seconds if delays else 0.0,
+            stream_delay=app_settings.mock_generator_delay_seconds if delays else 0.0,
+        )
+    job_manager = JobManager(
+        store=project_store,
+        gateway=gateway,
+        settings=app_settings,
+        heartbeat_seconds=app_settings.sse_heartbeat_seconds,
+    )
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        project_store.open()
+        job_manager.recover_interrupted()
         await manager.start()
         try:
             yield
         finally:
+            await job_manager.shutdown()
             await manager.shutdown()
+            project_store.close()
 
     application = FastAPI(
         title="Agentic PRD Architect API",
@@ -242,6 +273,9 @@ def create_app(
     application.state.settings = app_settings
     application.state.manager = manager
     application.state.scenario_controller = scenario_controller
+    application.state.project_store = project_store
+    application.state.jobs = job_manager
+    application.include_router(build_v3_router(project_store, job_manager))
 
     @application.get(
         "/api/providers", response_model=PublicProvidersResponse, tags=["system"]
@@ -269,7 +303,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=app_settings.frontend_origins,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Accept", "Content-Type", "Last-Event-ID", "X-Request-ID"],
     )
 
@@ -428,6 +462,38 @@ def create_app(
             message="Cancellation has been requested.",
         )
 
+    @application.post(
+        "/api/runs/{run_id}/recover",
+        response_model=CreateRunResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+        tags=["controls"],
+    )
+    async def recover_run(
+        run_id: UUID,
+        request: RecoverRunRequest,
+    ) -> CreateRunResponse:
+        """Start a new run derived from a finished one; the source is untouched."""
+        snapshot = await manager.create_recovery_run(run_id, request.mode)
+        return CreateRunResponse(
+            run_id=snapshot.run_id,
+            status=snapshot.status,
+            events_url=f"/api/runs/{snapshot.run_id}/events",
+            created_at=snapshot.created_at,
+        )
+
+    @application.get(
+        "/api/runs/{run_id}/history",
+        response_model=RunHistoryResponse,
+        tags=["events"],
+    )
+    async def run_history(run_id: UUID) -> RunHistoryResponse:
+        await manager.get_run(run_id)
+        return RunHistoryResponse(items=manager.history(run_id))
+
+    @application.get("/api/rubric", tags=["system"])
+    async def rubric() -> dict[str, Any]:
+        return rubric_document()
+
     @application.get("/api/runs/{run_id}/events", tags=["events"])
     async def stream_events(
         run_id: UUID,
@@ -500,6 +566,8 @@ def create_app(
         RunSummary,
         RunListResponse,
         RunEvent,
+        RunHistoryResponse,
+        RecoverRunRequest,
         ErrorResponse,
     )
 
