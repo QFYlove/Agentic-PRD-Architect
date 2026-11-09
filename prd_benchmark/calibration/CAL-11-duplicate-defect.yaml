@@ -1,0 +1,69 @@
+id: CAL-11
+title: 同一底层缺陷在多个条目、两轮评审中只计一次；Judge 候选与主张合并
+case_id: PQB-P02
+covers: [duplicate_defect]
+document: |-
+  # 客服智能回复 PRD
+  经确认，AI 生成的回复将自动发送给客户，无需客服确认。
+  历史聊天记录经脱敏后用于检索相似问题。
+  上线后客服平均处理时长降低 30%。
+responses:
+  # Pass 1: the auto-send decision contradicts both R2 and C2 -- one defect.
+  - fill: {verdict: covered, quote: 历史聊天记录经脱敏后用于检索相似问题}
+    items:
+      R2:
+        verdict: contradicted
+        contradiction_kind: general
+        quote: 经确认，AI 生成的回复将自动发送给客户，无需客服确认
+        behavior_impact: 「AI 生成的回复将自动发送给客户」让未经客服审核的建议直接到达客户
+        defect_key: auto-send-as-fact
+        rule_basis: [R2]
+      C2:
+        verdict: contradicted
+        contradiction_kind: general
+        quote: 经确认，AI 生成的回复将自动发送给客户
+        behavior_impact: 「经确认，AI 生成的回复将自动发送给客户」把待澄清的人机边界写成既定决定，前端不会提供人工确认步骤
+        defect_key: auto-send-as-fact
+        rule_basis: [C2]
+    critical_candidates:
+      - {rule_id: P02-X2, quote: 经确认，AI 生成的回复将自动发送给客户，无需客服确认, rationale: 自动发送且未标注待确认}
+  # Pass 2 (shuffled order): the same defect found again under the same key.
+  - fill: {verdict: covered, quote: 历史聊天记录经脱敏后用于检索相似问题}
+    items:
+      C2:
+        verdict: contradicted
+        contradiction_kind: general
+        quote: 经确认，AI 生成的回复将自动发送给客户
+        behavior_impact: 「AI 生成的回复将自动发送给客户」使客服无法在发送前修改错误建议
+        defect_key: auto-send-as-fact
+        rule_basis: [C2]
+    critical_candidates:
+      - {rule_id: P02-X2, quote: 经确认，AI 生成的回复将自动发送给客户，无需客服确认, rationale: 同上}
+reviews:
+  - name: auto
+    expect:
+      # One defect key -> one general contradiction per pass -> cap 3 (not 2).
+      general_contradictions: {base: [1, 1]}
+      correctness_caps: {base: [3, 3]}
+      disagreements: [R2]
+      # The judge candidate is pending: status pending, but no claim withholds
+      # the score, so a final total exists.
+      status: pending
+      candidates:
+        - {rule_id: P02-X2, violated_constraint: null, decision: pending}
+      # R weights 12 (9 items, 3 core). Pass 1: R2 (core) 0 -> 10/12 ->
+      # 20.8333 + 15 + 55 = 90.8333. Pass 2: R2 covered -> 25 + 70 = 95.
+      final_total: 92.9167
+      provisional_pass: null
+  - name: candidate-confirmed
+    human:
+      decisions:
+        - candidate: [P02-X2, 经确认，AI 生成的回复将自动发送给客户，无需客服确认]
+          decision: confirmed
+    expect:
+      # A confirmed judge candidate is a critical defect but changes no score.
+      status: final
+      final_total: 92.9167
+      provisional_pass: false
+      candidates:
+        - {rule_id: P02-X2, violated_constraint: null, decision: confirmed}

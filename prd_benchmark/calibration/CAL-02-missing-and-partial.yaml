@@ -1,0 +1,27 @@
+id: CAL-02
+title: 必需项完全遗漏与部分覆盖
+case_id: PQB-P01
+covers: [missing, partial]
+document: |-
+  # 文章收藏 PRD
+  登录用户可以在文章详情页收藏或取消收藏，重复点击不会产生重复记录。
+  未登录用户点击收藏时跳转登录页。
+  用户最多创建 20 个收藏夹，可以重命名和删除。
+responses:
+  - fill: {verdict: covered, quote: 登录用户可以在文章详情页收藏或取消收藏}
+    items:
+      # Login redirect is there, but auto-completing the favourite is not: partial.
+      R2: {verdict: partial, quote: 未登录用户点击收藏时跳转登录页}
+      # The 5000 limit is never mentioned: missing (no quote).
+      R9: {verdict: missing, rationale: 检查了收藏夹、列表、同步各节，未提及总数上限}
+reviews:
+  - name: auto
+    expect:
+      status: final
+      # R weights total 16 (four core items x2); R2 loses 1, R9 loses 2.
+      # coverage 25 x 13/16 = 20.3125; dimensions 75.
+      final_total: 95.3125
+      judgments:
+        R9: {verdict: missing, verified: true}
+        R2: {verdict: partial, verified: true}
+      candidates: []

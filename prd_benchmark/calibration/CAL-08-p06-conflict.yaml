@@ -1,0 +1,44 @@
+id: CAL-08
+title: P06 冲突用例：明确取舍任一侧都不违反 H；未说明冲突则由人工补充严重缺陷
+case_id: PQB-P06
+covers: [conflict]
+document: |-
+  # 团课预约 PRD
+  会员可以预约未来 7 天内的团课。
+  冲突①：离线时无法确认剩余名额，"绝不超卖"与"离线立即显示预约成功"不能同时满足。推荐以不超卖为准，离线时显示"已提交，等待确认"，放弃"立即显示预约成功"，需老板确认。
+  冲突②：递补截止调整为开课前 2 小时，与教练锁定名单一致，放弃运营"递补到开课前 15 分钟"的要求，需运营与教练共同确认。
+  冲突③：不收集手机号，改用小程序订阅消息通知递补结果，放弃短信通知，需法务与运营确认。
+  备选方案（待业务批准）：被递补会员首次在 2 小时内取消不计爽约。
+responses:
+  - fill: {verdict: covered, quote: 会员可以预约未来 7 天内的团课}
+    items:
+      R1: {verdict: covered, quote: '"绝不超卖"与"离线立即显示预约成功"不能同时满足'}
+      R2: {verdict: covered, quote: 递补截止调整为开课前 2 小时}
+      R3: {verdict: covered, quote: 不收集手机号，改用小程序订阅消息通知递补结果}
+      R10: {verdict: covered, quote: 备选方案（待业务批准）：被递补会员首次在 2 小时内取消不计爽约}
+      # A judge that treats the trade-off on conflict K2 as a violation: the
+      # rule basis is a conflict id, so the contradiction is refused.
+      R11:
+        verdict: contradicted
+        contradiction_kind: general
+        quote: 放弃运营"递补到开课前 15 分钟"的要求
+        behavior_impact: 「放弃运营"递补到开课前 15 分钟"的要求」使开课前 2 小时内释放的名额不再递补
+        defect_key: waitlist-cutoff-two-hours
+        rule_basis: [K2]
+reviews:
+  - name: auto
+    expect:
+      status: final
+      judgments:
+        R11: {verified: false, problem: basis_is_conflict}
+      correctness_caps: {final: [4]}
+      candidates: []
+      # R weights 16; R11 (plain) unverified -> 25 x 15/16 = 23.4375; dims 75.
+      final_total: 98.4375
+  - name: human-corrects-judge
+    human:
+      item_overrides:
+        R11: {verdict: covered, note: 取舍已说明，属于可接受答案}
+    expect:
+      status: final
+      final_total: 100

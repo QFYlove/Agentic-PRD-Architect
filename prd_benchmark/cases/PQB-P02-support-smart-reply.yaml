@@ -1,0 +1,150 @@
+id: PQB-P02
+title: 客服智能回复
+category: ambiguous # 需求信息缺失或存在歧义
+case_version: v0.3 # v0.3: H quotes verbatim
+status: draft
+
+frozen_input:
+  user_idea: |-
+    我们的客服团队太忙了，想做一个"智能回复"功能，让客服回复更快，客户也更满意。最好能参考以前的聊天记录。下个季度上线。
+  target_audience: |-
+    客服人员
+  user_constraints: |-
+    不增加客服编制。
+
+evaluator_context: |-
+  信息严重不足的需求。主要考察：是否识别出决定方案走向的关键未知项（C 条目），
+  是否把自己做的设定明确标注为假设，以及在未知项存在的情况下能否给出合理、可调整的 MVP。
+  评分看关键问题的覆盖，不看问题数量（见 rubric.md 2.2）。
+
+hard_constraints:
+  - id: H1
+    text: 不增加客服编制
+    quote: 不增加客服编制。
+
+# Key questions. Scored by coverage of these specific questions, never by count.
+clarifications:
+  - id: C1
+    question: 适用的服务渠道（在线聊天、邮件工单、电话、社交媒体等）
+    core: true
+    impact: 渠道决定集成对象、回复形态和 MVP 范围；悄悄假定渠道会让整份设计建立在未确认的前提上
+    accept: 提出渠道范围问题，或标注"假设 MVP 仅覆盖某渠道，待确认"
+    not_counted: 只说"支持多渠道"而不指出需要确认哪些
+  - id: C2
+    question: AI 建议能否直接发送给客户，还是必须由客服确认或编辑后发送
+    core: true
+    impact: 决定风险等级、责任归属和全部交互设计；默认自动发送会把错误回复直接暴露给客户
+    accept: 提出问题，或标注"假设需人工确认后发送，待确认"
+    not_counted: 直接设计为自动发送且未标注
+  - id: C3
+    question: 历史聊天记录能否用于该用途（用户授权、敏感信息、合规要求、保留期限）
+    core: true
+    impact: 未经确认就使用含客户个人信息的聊天记录，可能违反授权范围或隐私要求，且上线前才发现会推翻数据方案
+    accept: 明确提出数据使用的授权或合规问题，而不仅是技术接入问题
+    not_counted: 只问"历史数据在哪里/有多少"
+  - id: C4
+    question: 「回复更快」「更满意」的量化口径、当前基线和目标值
+    core: true
+    impact: 没有口径和目标，上线后无法判断是否达成题面唯一的业务目标
+    accept: 指出需要确定具体指标（如首次响应时长、平均处理时长、满意度评分）及基线和目标；可给出候选指标，但目标值必须标为待确认
+    not_counted: 自行给出目标值并当作既定目标
+  - id: C5
+    question: 现有客服系统或工单系统是什么，如何集成
+    core: false
+    accept: 提出集成对象或方式的问题
+  - id: C6
+    question: 历史聊天数据的规模、时间跨度、质量和存储位置
+    core: false
+    accept: 提出数据可用性问题（与 C3 的授权问题区分）
+  - id: C7
+    question: 是否已有知识库、标准话术或 FAQ 可作为回复依据
+    core: false
+    accept: 提出除聊天记录以外的知识来源问题
+  - id: C8
+    question: 支持的语言
+    core: false
+    accept: 提出语言范围问题，或标注为假设
+  - id: C9
+    question: 「下个季度上线」的具体日期，以及上线范围（全量或试点）
+    core: false
+    accept: 提出时间或范围问题，或标注 MVP/试点的假设
+
+required_items:
+  - id: R1
+    text: 问题陈述与目标：客服负荷高、希望提速和提升满意度，并写明不增加编制的约束
+    source: E
+    core: false
+    check: 复述题面目标与约束，不编造背景数据
+  - id: R2
+    text: 人机边界：AI 生成建议，客服的操作方式（采用、编辑、拒绝、发送）
+    source: D
+    core: true
+    impact: 建议如何呈现、客服如何处置未定义时，前端交互和责任边界都无法实现
+    rationale: 是否自动发送决定了风险等级和全部交互设计，不定义则无法实现
+    check: 写明建议如何呈现、客服如何处理；是否自动发送须与 C2 的结论一致（提出问题或标为假设）
+  - id: R3
+    text: 历史聊天数据的使用方案，包含脱敏或敏感信息处理
+    source: ED
+    core: true
+    impact: 聊天记录中的客户个人信息会被原样用于生成建议，存在泄露给其他客户或越权使用的风险
+    rationale: 题面要求参考历史聊天记录；聊天记录必然含客户个人信息
+    check: 有具体的处理措施（如脱敏、访问范围、不用于某些用途）；只说"注意隐私"为 partial
+  - id: R4
+    text: 效率与满意度指标的定义（分子分母或计算口径），基线待获取
+    source: D
+    core: true
+    impact: 无法埋点、无法验收，上线后不能判断功能是否带来题面要求的提速和满意度提升
+    rationale: 题面目标"更快""更满意"不可验收，必须转化为可度量指标
+    check: 至少一个效率指标和一个满意度指标有明确口径；目标值须与 C4 一致（待确认）
+  - id: R5
+    text: 无建议或低置信度时的降级行为
+    source: D
+    core: false
+    rationale: 生成式建议必然存在无法回答的情况，不定义会导致界面空白或给出错误建议
+    check: 写明此时客服看到什么、能做什么
+  - id: R6
+    text: 记录客服对建议的采纳、修改、拒绝，用于效果评估
+    source: D
+    core: false
+    rationale: 没有采纳数据就无法验证"回复更快"的目标
+    check: 写明记录哪些行为
+  - id: R7
+    text: 错误、不当或不合规回复的风险控制措施
+    source: D
+    core: false
+    rationale: 面向客户的生成内容存在承诺错误、语气不当等风险。v0.2 降为普通项：若采用人工确认后发送，人工确认本身已是主要控制，额外措施属于设计深度而非缺失即不可实现
+    check: 有具体措施（人工确认、敏感话题拦截、禁止承诺退款等任一类）
+  - id: R8
+    text: 分阶段范围：MVP 与后续阶段，明确 MVP 不包含的内容
+    source: D
+    core: false
+    rationale: 未知项多且有时间要求，需要可调整的最小范围
+    check: 有 MVP 范围和非目标
+  - id: R9
+    text: 待澄清问题与假设的汇总，并标明对方案的影响
+    source: D
+    core: false
+    rationale: 便于决策方逐项确认；只看是否存在汇总及是否说明影响，不看数量
+    check: 有集中的待确认清单或假设清单，且至少部分条目说明了"不同答案会如何改变方案"
+
+acceptable_assumptions:
+  - MVP 仅覆盖文字类渠道（在线聊天或邮件），标注为假设
+  - 建议须经客服确认后发送，标注为假设
+  - 历史数据仅用于检索参考、不用于模型训练，标注为假设
+  - 先在一个客服小组试点
+
+critical_defects:
+  - id: P02-X1
+    condition: 自行编造目标数值（如"处理时长降低 30%"）并作为既定目标，未标注为假设或待确认
+  - id: P02-X2
+    condition: 设计为 AI 回复自动发送给客户，且未将其标注为待确认
+  - id: P02-X3
+    condition: 使用历史聊天记录但完全未涉及授权、隐私或敏感信息
+  - id: P02-X4
+    condition: 将某种具体渠道、集成系统或数据规模当作已知事实写入，并据此做出核心设计
+
+judge_notes: |-
+  本用例不奖励"问题多"。C 条目按内容逐条匹配：一个问题可以同时覆盖多个 C 条目，一长串泛泛的问题可能一个都覆盖不了。
+  不在 C 清单中的问题既不加分也不扣分。
+  给出候选指标、候选方案并标注待确认是好的做法，不应因为"没有给出确定答案"而扣分。
+  文档可以在未知项下仍给出完整 MVP 设计；只要设定都标注为假设，不算 G2。

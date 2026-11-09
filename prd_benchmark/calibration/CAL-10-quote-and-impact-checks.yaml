@@ -1,0 +1,39 @@
+id: CAL-10
+title: 引用不存在、引用与原文不符、虚构 behavior_impact
+case_id: PQB-P08
+covers: [quote_not_found, quote_mismatch, fabricated_impact]
+document: |-
+  # 新手引导实验 PRD
+  激活：注册后 72 小时内完成至少 3 笔记账，或成功导入 1 份银行账单。
+  实验最多使用 50% 的新用户流量，实验期最长 4 周。
+  改版不得使次周留存下降超过 1 个百分点。
+responses:
+  - fill: {verdict: covered, quote: 实验最多使用 50% 的新用户流量}
+    items:
+      # Quote absent from the document: a covered verdict earns nothing.
+      R5: {verdict: covered, quote: 样本量按 MDE 2 个百分点估算为每组 4 万人}
+      # Quote paraphrases the document (wording differs): not verbatim.
+      R1: {verdict: covered, quote: 注册三天内记三笔账或导入一份账单}
+      # Claim quotes real text, but its impact cites text the document lacks.
+      R6:
+        verdict: partial
+        quote: 改版不得使次周留存下降超过 1 个百分点
+        hard_constraint_claim:
+          violated_constraint: H6
+          quotes: [改版不得使次周留存下降超过 1 个百分点]
+          behavior_impact: 「导入失败率阈值放宽为 10%」会让导入故障不触发回滚
+          defect_key: import-failure-threshold
+reviews:
+  - name: auto
+    expect:
+      status: final
+      judgments:
+        R5: {verified: false, problem: quote_not_found}
+        R1: {verified: false, problem: quote_not_found}
+      invalid_claims:
+        - {item_id: R6, reason: impact_quote_not_found}
+      counts: {valid_claims: 0, unverified_judgments: 2}
+      candidates: []
+      # R weights 18 (12 items, 6 core). Lost: R5 1 (plain), R1 2 (core),
+      # R6 partial 1 (core) -> 14/18 -> 19.4444; dims 75.
+      final_total: 94.4444

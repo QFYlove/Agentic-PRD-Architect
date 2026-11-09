@@ -1,0 +1,92 @@
+id: PQB-P91
+title: 会议室预订（Judge 校准用）
+category: calibration_clear
+case_version: v0.1
+status: draft
+
+frozen_input:
+  user_idea: |-
+    为一家 200 人的公司设计会议室预订功能。员工可以在网页上查看各会议室的空闲时段并预订，每次预订以 30 分钟为单位，单次最长 4 小时，最多可提前 14 天预订。预订人可以在会议开始前取消。会议开始后 15 分钟内无人签到的，系统自动释放该会议室。
+  target_audience: |-
+    全体员工、行政人员。
+  user_constraints: |-
+    同一会议室同一时段不得被重复预订。每位员工同时持有的未开始预订不超过 5 个。行政人员可以把会议室设为维护状态，维护期间不可预订。
+
+evaluator_context: |-
+  信息明确的简单需求，用于校准 Judge 对覆盖、部分覆盖、遗漏、明确硬约束违规和文档内部矛盾的判定。
+
+hard_constraints:
+  - id: H1
+    text: 每次预订以 30 分钟为单位，单次最长 4 小时，最多可提前 14 天预订
+    quote: 每次预订以 30 分钟为单位，单次最长 4 小时，最多可提前 14 天预订
+  - id: H2
+    text: 会议开始后 15 分钟内无人签到的，系统自动释放该会议室
+    quote: 会议开始后 15 分钟内无人签到的，系统自动释放该会议室
+  - id: H3
+    text: 同一会议室同一时段不得被重复预订
+    quote: 同一会议室同一时段不得被重复预订
+  - id: H4
+    text: 每位员工同时持有的未开始预订不超过 5 个
+    quote: 每位员工同时持有的未开始预订不超过 5 个
+  - id: H5
+    text: 维护期间不可预订
+    quote: 维护期间不可预订
+
+required_items:
+  - id: R1
+    text: 查看空闲时段并预订
+    source: E
+    core: true
+    impact: 核心功能缺失则无法使用
+    check: 有查看与预订流程
+  - id: R2
+    text: 预订粒度 30 分钟、单次最长 4 小时、最多提前 14 天
+    source: E
+    core: true
+    impact: 时长与提前期规则决定可预订范围
+    check: 三个数值都正确
+  - id: R3
+    text: 会议开始前可取消
+    source: E
+    core: false
+    check: 有取消规则
+  - id: R4
+    text: 开始后 15 分钟无人签到自动释放，以及签到方式
+    source: ED
+    core: true
+    impact: 不定义签到方式则释放规则无法执行
+    rationale: 释放规则是题面给定的；签到方式题面未给
+    check: 15 分钟规则正确且写明签到方式；只写规则为 partial
+  - id: R5
+    text: 防止同一会议室同一时段重复预订（含并发提交）
+    source: ED
+    core: true
+    impact: 并发下会出现双重预订
+    rationale: 禁止重复预订是题面给定的；并发提交是必然场景
+    check: 写明冲突检测；覆盖并发为 covered
+  - id: R6
+    text: 每人未开始预订不超过 5 个及超限提示
+    source: E
+    core: false
+    check: 上限正确
+  - id: R7
+    text: 行政人员设置维护状态，维护期间不可预订，已有预订如何处理
+    source: ED
+    core: false
+    rationale: 维护期间已有预订的处理题面未给
+    check: 写明设置方式与已有预订的处理（任一方式均可）
+
+clarifications:
+  - id: C1
+    question: 维护开始时已存在的预订如何处理（取消并通知、保留、由行政决定）
+    core: false
+    accept: 提出问题，或给出处理并标注为假设
+
+critical_defects:
+  - id: P91-X1
+    condition: 设计上允许同一会议室同一时段被重复预订
+  - id: P91-X2
+    condition: 维护期间仍可预订
+
+judge_notes: |-
+  只用于 Judge 校准，不参与 Pilot。

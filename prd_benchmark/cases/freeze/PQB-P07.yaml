@@ -1,0 +1,136 @@
+freeze_manifest_version: 1
+case_id: PQB-P07
+case_version: v0.3
+case_set_version: v0.3
+frozen_at: '2026-10-27T10:29:24+00:00'
+confirmed_by: null
+note: Technical freeze. Real batches stay blocked until a person who reviewed the
+  case sets confirmed_by. Any change to a gated file needs a new version and a new
+  freeze manifest.
+scope:
+  frozen_input_fields:
+  - user_idea
+  - target_audience
+  - user_constraints
+  hard_constraints:
+  - H1
+  - H2
+  - H3
+  - H4
+  - H5
+  - H6
+  - H7
+  - H8
+  required_items:
+  - R1
+  - R2
+  - R3
+  - R4
+  - R5
+  - R6
+  - R7
+  - R8
+  - R9
+  - R10
+  - R11
+  - R12
+  - R13
+  core_required_items:
+  - R1
+  - R2
+  - R4
+  - R6
+  - R8
+  clarifications:
+  - C1
+  - C2
+  - C3
+  - C4
+  - C5
+  - C6
+  - C7
+  - C8
+  - C9
+  - C10
+  - C11
+  core_clarifications:
+  - C1
+  - C3
+  critical_defects:
+  - P07-X1
+  - P07-X2
+  - P07-X3
+  - P07-X4
+  - P07-X5
+  - P07-X6
+  rule_relations:
+    explicit:
+    - L1
+    - L3
+    - L4
+    - L7
+    - L15
+    derived:
+    - L2
+    - L5
+    - L8
+    design_choice:
+    - L6
+    - L9
+    - L10
+    - L11
+    - L12
+    - L13
+    - L14
+  conflicts: []
+versions:
+  rubric: rubric-v0.4
+  judge_prompt: judge-prompt-v0.1
+  judge_schema: judge-output-v0.4
+  config: pilot-v0.1
+  config_status_at_freeze: draft
+parity_rule: 'Condition A is the same generator call as condition B''s v1: stream_prd(iteration=1,
+  revision_plan=None, baseline_prd=None), built from the same CreateRunRequest, so
+  both see byte-identical first requests (tests/test_streaming_and_parity.py).'
+git:
+  commit: cd56107ae8a86067d927aeb927787a8ce362a464
+  note: prd_benchmark/ was not committed at this commit; the code is identified by
+    the hashes below.
+pre_freeze_checks: passed
+gated_sha256:
+  cases/PQB-P07-recruiting-candidate-data.yaml: b1b709e8a1cee0c0b7e91a1f811f3150daff66fccff1fc2a9038be873b3257b6
+  rubric.md: 21e0741987bfe75535c2009313a35da9a0670227205e5817e314c132128dfddb
+  prompts/system-prompt.md: 07af144d5019f2d13da86ff98037c1075721327a56f0057f6e3f2191732dd5fc
+  scoring.py: a584280a8a2e390eb5ac88d29a7a306c667ff5d487055ef953e623618174f3c6
+  judge.py: 8a0e54dbd0ecb0e26d7fd3241372c2184293aa6c043bdf31a8f1b1e5c1733570
+  judge_prompt.py: 266272b170ccb34ce50cc3dbe9c2322300ff6bc360e0a8ccc4a1dfdf03e7f929
+  evidence.py: 2b1f2a35c0f8ce43bc5cd8b2778db0f93c0e72f260aa56ce25b4a6e235716d6c
+  run_single.py: c5bc136e0486bc419cbcfd7bfef54e0551e9b1c5395aa05701f1977a5b5fa184
+  run_workflow.py: 9f252ffa111a1a99099159b5df233109f47be9c59a75cfe06e81c7a138cbe320
+computed_sha256:
+  judge_system_prompt: 4ea49000e5e22d8eb418bfb2868f003df95685bf92f0f2caeb97db3b2db2408f
+  judge_output_schema: 9c4940bca076cb955140197e306b9809f04223bbf3f45157a8cf1426b1a2c583
+  judge_gold_standard: 9f831808c77966a4d74f63a3d3d184646af6554e7b6279387fbacdcfab44b22b
+  config_sections: f6f8d99d4e458162267c8be31c746090f6c3adab4331ebdfbb5fcc15f50c1bd0
+recorded_sha256:
+  __init__.py: 3833a7a5be755966f6cf468b27c168906eabbf5ff26004cfbba30bcf351ce0be
+  _yaml.py: 32d7bf53ae93dc9d6c7f2acbbb7de2070a75ab101efa178c6a9d913edb709440
+  artifacts.py: 02b43619ed94345059b8371fc02d879303459046429834c464ebf3608bc8ab4f
+  batch.py: 85d0805af5800f7f2bfb3d306b037badf3c28ffd7bff2d03a4dea2c581610e4b
+  calibrate.py: 22dd71a80c9be2f35d83dd91650b06cf81de759e12a61aeae85cbd5906e5fa25
+  cases.py: 3b8444ffd1614a443ec132a7c15ae6b21c654f5c6f581ad5d573a20382ed707b
+  checks.py: 7ebda5682ed8bf1a9806afb788fb46f5e02ca300ef6cb34a16261db77bcd9e8c
+  cli.py: b23642b11d8be39e876a9fc248e8a367d29e261e46aa05b625ee6afbf7400981
+  config.py: 562a49e359c539624aedb32b620647f917d7800447a1932c3de79111299eb12c
+  fake_openai.py: 109c2a366f13edf366db73a6533792207a1ef0900b9707969fff5ab4f2890be7
+  freeze.py: 4da160860963364bdb9b4007e19e184ae7aee2394dbfa594dba65e6855ec9637
+  guard.py: 0d91da06baf70a4181521a90ee5b4f3a33275bd9b2b6d436a8c19fdc8da503d0
+  human.py: 1f22817edc039179ad379454d8a4e4fbdb877c8f000d8f1129c562e8b5d8ba0b
+  judge_claude.py: 11e0b0ea5cf799cec4a883f40b281462315e0001e5f90bf73ef67e9b1bda9f92
+  judge_manual.py: 6deafd3eb800b3e511755c542e72c2859a972c34ae13129504178dcb116d673a
+  pipeline.py: 2708343ed5d707fa7a51f92deb6294d002a9a5bb524c20acf89247b9d7956ee3
+  pricing.py: d4dac599a429429f93e11160ae19693d83e3bf8278881104bd3b581e58436454
+  providers.py: 10c73eef02764d266f204976bada358c8cbf87e319d01f355db5add596a8341f
+  recording.py: 9361539933823cde6fb6c59000732ae0a2f583ac1ff3721664267824eced5b1c
+  report.py: 0f3f3a3a03a960a81ca0164faaa3455a06b8a0cc15b1ffa35e00ee09778a2855
+  review.py: c6be40e5457e89113d150f5eca0123584214b94fa190b4ec1234420a7375bc59

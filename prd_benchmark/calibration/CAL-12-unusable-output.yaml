@@ -1,0 +1,26 @@
+id: CAL-12
+title: 无法使用的 Judge 输出：解析错误、结构错误、夹带总分
+case_id: PQB-P01
+covers: [parse_error, structural_error]
+document: |-
+  # 文章收藏 PRD
+  登录用户可以在文章详情页收藏或取消收藏。
+raw_responses:
+  # Prose around the JSON object.
+  - 'Here is my assessment: {"judge_id": "x", "items": [], "dimensions": []}'
+  # A smuggled total score: extra fields are refused.
+  - '{"judge_id": "x", "items": [], "dimensions": [], "total_score": 92}'
+  # A list instead of one object.
+  - '[{"judge_id": "x"}]'
+responses:
+  # Schema-valid, but R12 is omitted: structurally unusable for this case.
+  - fill: {verdict: covered, quote: 登录用户可以在文章详情页收藏或取消收藏}
+    omit_items: [R12]
+reviews:
+  - name: auto
+    expect:
+      parse_errors: [not valid JSON, schema violation, not a JSON object]
+      structural: [do not match]
+      status: unscored
+      final_total: null
+      base_total: null

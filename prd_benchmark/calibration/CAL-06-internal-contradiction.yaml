@@ -1,0 +1,32 @@
+id: CAL-06
+title: 内部自相矛盾记入一致性，不封顶正确性、不生成候选
+case_id: PQB-P03
+covers: [internal]
+document: |-
+  # 采购审批 PRD
+  所有申请先由直属主管审批。
+  询价：至少取得 3 家供应商报价，预估金额低于 5000 元的可免询价。
+  附录：预估金额低于 3000 元的申请可免询价。
+responses:
+  - fill: {verdict: covered, quote: 所有申请先由直属主管审批}
+    items:
+      R5:
+        verdict: contradicted
+        contradiction_kind: internal
+        evidence_quotes: [预估金额低于 5000 元的可免询价, 预估金额低于 3000 元的申请可免询价]
+        behavior_impact: 「预估金额低于 3000 元的申请可免询价」与正文的 5000 元不同，3000 至 5000 元的申请是否询价无法确定
+        defect_key: inquiry-threshold-inconsistent
+    dimensions:
+      consistency:
+        anchor: 2
+        defects: [{description: 免询价阈值前后不一致, quote: 预估金额低于 3000 元的申请可免询价}]
+reviews:
+  - name: auto
+    expect:
+      status: final
+      # R5 core, internal -> credit 0.5 (weight 2 -> lose 1) -> 25 x 16/17.
+      # consistency anchor 2 -> 2.5 instead of 5; correctness not capped.
+      final_total: 96.0294
+      correctness_caps: {final: [4]}
+      counts: {internal_contradictions: 1, valid_claims: 0}
+      candidates: []

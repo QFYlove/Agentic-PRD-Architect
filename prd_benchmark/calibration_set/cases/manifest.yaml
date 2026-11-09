@@ -1,0 +1,17 @@
+# Judge calibration cases. NOT part of the Pilot (P01-P08) and never scored in
+# a Pilot batch. Drafts until two human reviewers have scored the documents.
+case_set: judge-calibration
+case_set_version: v0.1
+status: draft
+frozen_commit: null
+cases:
+  - id: PQB-P91
+    file: PQB-P91-meeting-room-booking.yaml
+    category: calibration_clear
+    status: draft
+    sha256: null
+  - id: PQB-P92
+    file: PQB-P92-expense-reimbursement.yaml
+    category: calibration_ambiguous
+    status: draft
+    sha256: null

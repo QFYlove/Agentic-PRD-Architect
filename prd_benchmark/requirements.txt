@@ -1,0 +1,7 @@
+# PRD Quality Benchmark harness dependencies.
+# The harness runs inside the product's virtualenv and reuses its pinned
+# runtime and dev dependencies; PyYAML is already present there transitively
+# (via langchain-core) and is pinned here so the benchmark does not rely on
+# that accident.
+-r ../backend/requirements-dev.txt
+PyYAML==6.0.3
