@@ -1,0 +1,230 @@
+/* ---------- App bar ---------- */
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  height: var(--bar-h);
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 var(--pad);
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: saturate(1.2) blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+
+.bar__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  flex: none;
+}
+
+.bar__crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+  min-width: 0;
+}
+
+.bar__crumb a:hover {
+  color: var(--ink);
+}
+
+.bar__crumb b {
+  color: var(--ink);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Two spaces per project: requirements and document. */
+.spaces {
+  display: inline-flex;
+  gap: 4px;
+  margin: 0 auto;
+}
+
+.spaces a {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--r);
+  font-size: var(--fs-sm);
+  color: var(--ink-2);
+  transition:
+    background var(--t) var(--ease),
+    color var(--t) var(--ease);
+}
+
+.spaces a:hover {
+  color: var(--ink);
+  background: var(--hover);
+}
+
+.spaces a.is-on {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.spaces a.is-on::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -10px;
+  height: 2px;
+  background: var(--ink);
+}
+
+.bar__end {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+  flex: none;
+}
+
+.spaces + .bar__end {
+  margin-left: 0;
+}
+
+.bar__saved {
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+}
+
+.main {
+  animation: fade 200ms var(--ease);
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.page-title {
+  font-size: var(--fs-title);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 60;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  max-width: min(640px, calc(100vw - 32px));
+  padding: 10px 12px 10px 16px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--surface);
+  font-size: var(--fs-sm);
+  animation: fade 200ms var(--ease);
+}
+
+.toast__action {
+  flex: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: #f2c6b8;
+  font-weight: 500;
+}
+
+.toast__action:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Step progress */
+.steps {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.steps i {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line-2);
+}
+
+.steps i.is-done {
+  background: var(--ink);
+}
+
+.steps i.is-now {
+  background: var(--accent);
+}
+
+/* Status glyphs. Only undecided states have one. */
+.smark {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-top: 8px;
+  flex: none;
+}
+
+.smark--inferred,
+.smark--proposed {
+  background: var(--accent);
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+.smark--proposed {
+  clip-path: none;
+  border-radius: 1px;
+}
+
+.smark--assumption {
+  border: 1.5px dashed var(--ink-3);
+  border-radius: 1px;
+}
+
+.smark--open {
+  border: 1.5px solid var(--accent);
+  border-radius: 50%;
+}
+
+@media (max-width: 760px) {
+  .bar {
+    gap: 10px;
+  }
+
+  .bar__brand span,
+  .bar__crumb a,
+  .bar__crumb span,
+  .bar__mode {
+    display: none;
+  }
+
+  .spaces {
+    margin: 0 0 0 auto;
+  }
+
+  .spaces a {
+    padding: 0 10px;
+  }
+
+  .spaces a.is-on::after {
+    left: 10px;
+    right: 10px;
+  }
+}

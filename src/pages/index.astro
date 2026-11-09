@@ -1,16 +1,13 @@
 ---
-import { AgentDashboard } from "../components/AgentDashboard";
-import Layout from "../layouts/Layout.astro";
+import V3Layout from "../layouts/V3Layout.astro";
+import { App } from "../v3/App";
 ---
 
-<Layout>
+<V3Layout>
   <noscript>
-    <div class="mx-auto max-w-3xl px-6 py-20 text-center text-ink">
-      <h1 class="text-2xl font-semibold">Agentic PRD Architect</h1>
-      <p class="mt-4 text-ink-muted">
-        实时工作流事件和运行控制需要启用 JavaScript。
-      </p>
-    </div>
+    <p style="padding: 80px 24px; text-align: center">
+      Agentic PRD Architect 需要启用 JavaScript。
+    </p>
   </noscript>
-  <AgentDashboard client:only="react" />
-</Layout>
+  <App client:only="react" />
+</V3Layout>

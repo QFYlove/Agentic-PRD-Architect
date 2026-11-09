@@ -57,7 +57,7 @@ export async function startRun(
     maxIterations?: number;
   } = {},
 ): Promise<string> {
-  await page.goto("/");
+  await page.goto("/runs");
   await page.getByLabel("产品想法").fill(options.idea ?? PODCAST_IDEA);
   await page.getByLabel("目标用户").fill("播客听众和独立内容创作者");
   await page.getByLabel("约束条件").fill("移动端优先、无障碍并保护隐私的 MVP");

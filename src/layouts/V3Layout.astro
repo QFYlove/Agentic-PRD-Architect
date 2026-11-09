@@ -1,0 +1,26 @@
+---
+import "../v3/styles/index.css";
+
+interface Props {
+  title?: string;
+}
+
+const { title = "Agentic PRD Architect" } = Astro.props;
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="description"
+      content="从一个模糊的想法开始，经过需求探索、产品分析、PRD 生成、四维审查和定向优化，得到可交付的产品需求文档。"
+    />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="generator" content={Astro.generator} />
+    <title>{title}</title>
+  </head>
+  <body class="v3">
+    <slot />
+  </body>
+</html>
