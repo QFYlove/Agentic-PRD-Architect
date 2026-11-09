@@ -32,3 +32,6 @@ data/*.sqlite3
 data/*.sqlite3-*
 data/*.db
 data/*.db-*
+
+# Automatic database backups made before V3 migrations
+data/backups/
