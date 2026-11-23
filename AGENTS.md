@@ -2,16 +2,25 @@
 
 ## Project Structure & Module Organization
 
-Product requirements live in `PRD.md`; design, stack, implementation, architecture, and progress documents live in `memory-bank/`. Keep them aligned when changing scope or protocols.
+The product is the V3 project workspace: idea → exploration → requirement baseline → Product Analyst → Product Brief → outline → per-section PRD → four reviewers → targeted optimisation → versions → Markdown export.
 
-The planned implementation is split into:
+Documentation:
 
-- `backend/`: FastAPI entry point, Pydantic schemas, LangGraph workflow, LLM providers, run/event stores, and `backend/tests/`.
-- `src/`: Astro pages/layouts, React components, hooks, API helpers, and shared TypeScript types.
-- `public/`: static assets.
-- `.env.example`: documented, non-secret configuration.
+- `PRD.md`: short English product summary; `docs/product-definition.md`: full product definition.
+- `docs/v3-planning/`: V3 architecture, data model, interaction, design system, roadmap, open decisions.
+- `docs/product-audit/`: architecture map, issue register, and solution log (append a record for every completed change).
+- `memory-bank/progress.md`: current status. The other `memory-bank/` files describe the V1/V2 baseline and are kept for reference.
 
-Keep business workflow code out of HTTP handlers. API routes should delegate to `RunManager`; model access should go through the provider interface.
+Code:
+
+- `backend/v3/`: V3 domain models, SQLite store and migrations, `JobManager`, services (`explore`, `document`, `review`, `optimize`, `quality`), prompts, rubric, pure rules, mock gateway, and the `/api/v3` router.
+- `backend/` (top level): V2 run pipeline (`RunManager`, LangGraph `workflow.py`, run/event stores) plus shared pieces V3 reuses (`failures.py`, `errors.py`, providers, `prd_document.py`, `prd_quality.py`, `observability.py`, `telemetry.py`).
+- `src/v3/`: the V3 workspace UI; `src/pages/index.astro` mounts it, `src/pages/runs.astro` mounts the V2 dashboard (`src/components/`, `src/hooks/`, `src/lib/`).
+- `backend/tests/`, `src/**/*.test.ts(x)`, `e2e/`: tests. `scripts/v3/walkthrough.mjs` drives the app for screenshots.
+- `contracts/v1/`: frozen V2 contract examples. Do not change them.
+- `design-preview/`: standalone visual prototypes, not part of the app.
+
+Keep business workflow code out of HTTP handlers. V3 routes delegate to the services in `backend/v3/`, every model call runs as a Job through `JobManager`, and model access goes through the gateway (`backend/v3/llm.py`). V2 routes delegate to `RunManager`.
 
 ## Build, Test, and Development Commands
 
@@ -29,7 +38,7 @@ Keep business workflow code out of HTTP handlers. API routes should delegate to 
 - `./.venv/bin/ruff format --check backend && ./.venv/bin/ruff check backend && ./.venv/bin/mypy backend`:
   backend style and types.
 
-Use `ENABLE_MOCK_LLM=true` for deterministic local development without API costs.
+Use `ENABLE_MOCK_LLM=true` for deterministic local development without API costs. V3 schema changes go into a new numbered entry in `MIGRATIONS` in `backend/v3/store.py`; never edit a shipped migration.
 
 ## Coding Style & Naming Conventions
 
@@ -39,7 +48,7 @@ Use `PascalCase` for React components and Pydantic models, `camelCase` for TypeS
 
 ## Testing Guidelines
 
-Name Python tests `test_*.py`, Vitest files `*.test.ts(x)`, and Playwright scenarios `*.spec.ts`. Cover state transitions, iteration limits, parallel reviewers, the quality gate's two independent conditions, feedback severity derivation, generation completeness signals, preservation of committed versions when a later one fails, pause/resume/cancel behavior, SSE replay, reducer deduplication, and malformed model output. Prefer `MockLLMProvider`; real-provider tests should be explicit smoke tests.
+Name Python tests `test_*.py`, Vitest files `*.test.ts(x)`, and Playwright scenarios `*.spec.ts`. Shared V3 fixtures (`app`, `client`) are in `backend/tests/conftest.py`. For V3, cover: AI output never becomes confirmed, user-sourced quotes exist in user messages, findings need evidence, reviewers stay in their own domain and allow zero findings, cross-reviewer dedup, rejected findings stay rejected, only accepted findings reach the Optimizer, human sections are not overwritten, stale marking and format-only edits, single-section failure isolation, append-only versions, SSE replay, soft delete, and internal codes kept out of document text. Keep the V2 coverage (completeness signals, retries, pause/resume/cancel, SSE replay). Use the mock gateway or `MockLLMProvider`; real-provider tests are explicit manual smoke tests.
 
 ## Commit & Pull Request Guidelines
 
@@ -49,4 +58,4 @@ Pull requests should include a concise summary, affected architecture, test comm
 
 ## Security & Agent Rules
 
-Never commit `.env`, API keys, the local SQLite database, or test artifacts. Do not render raw model HTML or expose hidden chain-of-thought; Mermaid runs in strict security mode with HTML labels disabled. Do not surface raw provider errors, stack traces, or keys to the frontend. Tech, UX, and Business reviewers remain independent; aggregate scores deterministically in backend code and never use a model's self-reported total.
+Never commit `.env`, API keys, the local SQLite database, or test artifacts. Do not render raw model HTML or expose hidden chain-of-thought; Mermaid runs in strict security mode with HTML labels disabled. Do not surface raw provider errors, stack traces, or keys to the frontend. The four V3 reviewers (Product, UX, Tech, Biz) remain independent; compute every score in backend code, never use a model's self-reported total, and never average the four into one score. The AI never confirms or rejects requirement items; only user actions do. Internal requirement and finding codes never appear in Brief, PRD, or exported text.

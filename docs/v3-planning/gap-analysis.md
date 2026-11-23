@@ -1,5 +1,7 @@
 # V3.0 差距分析
 
+> 状态（2026-11-09）：本文描述的是 V3 开发前的差距，差距已按 MVP P0 补齐，见 [solution-log.md](../product-audit/solution-log.md) SL-008、SL-009。
+
 - 日期：2026-11-08
 - 产品依据：[product-definition.md](../product-definition.md)（V0.1）
 - 代码基线：`main` @ `cd56107` 加上未提交的 V2.0 改动（见 [product-audit/solution-log.md](../product-audit/solution-log.md) SL-002 至 SL-007）

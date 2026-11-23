@@ -2,66 +2,106 @@
 
 **English** | [简体中文](docs/README_ZH.md)
 
-Agentic PRD Architect turns a product idea into a versioned, reviewed PRD. A
-FastAPI/LangGraph backend runs a Generator, three parallel Reviewers, a
-deterministic Aggregator, and an Optimizer, looping until the quality gate
-passes or the iteration budget runs out. The Astro/React frontend streams
-progress over replayable SSE. Mock mode is deterministic and needs no external
-credentials.
+Agentic PRD Architect is a workspace for product managers. It starts from a
+vague idea, explores the requirements with the user round by round, checks them,
+turns them into a confirmed Product Brief, writes the PRD section by section,
+reviews it from four independent angles, and applies only the fixes the user
+accepts. The output is a versioned Markdown PRD.
 
-## What it does
+The user drives every step. Each AI task runs once and stops; nothing the AI
+infers counts as agreed until the user confirms it.
 
-**The loop.** Generator drafts `vN` → Tech, UX, and Biz Reviewers score it in
-parallel → the Aggregator computes the overall score in backend code (the
-model's own total is never used) → if the run continues, the Optimizer emits a
-structured Revision Plan that the next Generator pass must address item by item.
+## Workflow
 
-**Quality gate.** A run is only `COMPLETED` when
-`overall_score >= quality_threshold` **and** `must_fix_count == 0`. Those are two
-independent facts: a run can reach 91 against a target of 85 and still be held by
-one blocking finding. Exhausting the iteration budget instead ends the run as
-`MAX_ITERATIONS_REACHED`, which is a normal ending, not a failure — the outcome
-panel then reports the target that was not met alongside the best version, which
-is frequently not the last one.
+Each project has two spaces: **Requirements** and **Document**.
 
-**Feedback severity.** Every reviewer finding is `must_fix`, `should_fix`, or
-`optional`. Only `must_fix` gates completion; the other two survive a finished
-PRD as advice. Counts are derived from the stored findings on demand, never
-persisted as totals, so the Reviewer panel, the outcome summary, and the trace
-can never disagree about one list.
+1. **Create a project** from an idea, from existing requirements (meeting
+   notes, a rough spec), or by pasting an existing PRD for review. A pasted PRD
+   is split into sections and goes straight to step 7.
+2. **Explore.** Each round the Requirement Explorer reads the user's answers,
+   updates the requirement baseline, and asks 1–3 new questions, each with the
+   reason it matters. Questions can be answered, skipped, or marked "not sure";
+   the last two become open items. Depth is "brief" (2 questions) or
+   "detailed" (3).
+3. **Requirement baseline.** Twelve groups: positioning, goals, users,
+   problems, scenarios, current alternatives, solution, features, constraints,
+   assumptions, decisions, open items. Every item keeps its source, status,
+   priority, and revision history. The AI can only mark items as inferred,
+   proposed, assumption, or open; only the user confirms or rejects.
+4. **Check requirements.** The Product Analyst looks for gaps, conflicts,
+   missing scenarios, risks, and opportunities. Every finding cites baseline
+   items. Accepted findings become questions in the next round.
+5. **Product Brief.** Assembled by code from the baseline, editable, and
+   confirmed once; a confirmed Brief is frozen as a version. "Check Brief" runs
+   the Product Analyst on that snapshot.
+6. **Outline and sections.** The Generator proposes an outline for this product
+   (no fixed template). The user adds, removes, renames, and reorders sections,
+   then confirms. Sections are generated one at a time with streaming; a failed
+   section is retried alone.
+7. **Four-way review.** Product, UX, Tech, and Biz reviewers run in parallel
+   and independently on the finished document. Findings appear as highlights in
+   the text. The user accepts, accepts with changes, defers, or rejects each.
+8. **Targeted optimisation.** The Optimizer proposes edits only for accepted
+   findings. The user picks which edits to apply; applying creates a new
+   version. Sections the user wrote are never changed without that choice.
+9. **Edit and recheck.** Saving a section runs a deterministic impact check:
+   related findings become stale and dependent sections are flagged, so only
+   those need a recheck. Formatting-only edits trigger nothing.
+10. **Versions, quality, export.** Append-only versions with section-level
+    diffs, four quality views, and Markdown export with internal markers and
+    requirement codes removed.
 
-**Versions.** Every version keeps its own content, evaluation, revision plan, and
-token usage. `best_version` / `best_score` track the highest-scoring version, not
-the newest one.
+Steps 4–10 can be revisited in any order.
 
-**Reading the output.** PRDs render as GFM (tables included) with raw HTML
-disabled. Mermaid `flowchart` / `sequenceDiagram` / `stateDiagram-v2` / `mindmap`
-/ `erDiagram` blocks are lazily loaded on first use, rendered with
-`securityLevel: "strict"` and `htmlLabels: false`, and fall back to the diagram
-source when a definition does not parse. Version comparison offers a rendered
-reading view and a source view. Any version downloads as raw UTF-8 Markdown.
+## Scoring
 
-**Reliability.** A generated PRD must satisfy two independent completeness
-signals: the provider's `finish_reason`, and a completion sentinel the model
-writes as its final line (stripped before display, so it never reaches a reader
-or a download). Either one failing rejects the attempt, and the three causes —
-output cap, early stop, service interruption — map to three distinct error codes
-and three distinct messages, because "incomplete" alone cannot tell a user what
-to change. When a later version fails to generate, every version already
-committed is preserved and the UI names the version that died rather than
-implying the run was lost.
+Reviewers never produce a total. Each reviewer scores its four rubric
+dimensions from 1 to 5 with a reason, and the backend computes
+`score = Σ(dimension / 5 × weight) × 100`. A missing dimension means "not
+scored", not a guess. The four reviewer scores are shown separately and never
+averaged.
 
-**Observability.** Per-node timings record each call's node, version, attempt,
-wall-clock seconds, and tokens — including attempts that burned tokens and then
-produced an unusable document. SSE reconnects replay from `Last-Event-ID` without
-duplicates or gaps; a client that has fallen too far behind recalibrates from an
-atomic snapshot. Conversations, snapshots, and replayable events persist in
-SQLite, so history survives a restart.
+| Reviewer | Dimensions (weight) |
+|---|---|
+| Product | Problem definition and user fit 30% · Solution soundness 25% · Completeness and consistency 25% · MVP scope and priority 20% |
+| UX | Fit to needs and scenarios 25% · Core task flows 30% · Interaction clarity 25% · State feedback and recovery 20% |
+| Tech | Feasibility 30% · Architecture, interfaces and data 25% · Reliability and failure handling 25% · Security and constraints 20% |
+| Biz | User value 30% · Positioning 25% · MVP scope and priority 20% · Business model and cost 25% |
 
-## Prerequisites and installation
+Findings are `must_fix`, `should_fix`, or `optional`. A finding without
+evidence is dropped; one whose quote cannot be found in the document is marked
+and cannot be `must_fix`; "needs a number" findings are capped at `should_fix`.
+
+The quality panel shows four separate, rule-based views: document quality,
+requirement maturity, implementation readiness, and open risks and blockers. A
+view with nothing to measure shows no number.
+
+## Architecture
+
+- **Frontend:** Astro 4 + React 18 (`src/v3/`). `/` is the V3 workspace;
+  `/runs` is the V2 dashboard, kept as read-only history.
+- **Backend:** FastAPI. V3 lives in `backend/v3/` under `/api/v3`; the V2 run
+  pipeline (`/api/runs`, LangGraph loop) is unchanged.
+- **Model calls:** five kinds — Explorer, Analyst, Generator (outline and
+  section), four Reviewers, Optimizer. Each call is one Job with durable events
+  and SSE replay. Retry rules are shared with V2: transient failures retry once,
+  output-cap truncation never retries.
+- **Storage:** SQLite (`data/agentic-prd.sqlite3`). V3 uses its own `v3_*`
+  tables with numbered migrations; the file is copied to `data/backups/` before
+  the first migration runs.
+- **Rules in code, not prompts:** status limits on AI output, verbatim checks
+  for quotes attributed to the user, evidence checks on findings, cross-reviewer
+  dedup and matching against existing findings, optimistic locking on sections,
+  impact analysis, scores, and quality views.
+
+Details: [docs/product-definition.md](docs/product-definition.md),
+[docs/v3-planning/](docs/v3-planning/),
+[docs/product-audit/architecture-map.md](docs/product-audit/architecture-map.md).
+
+## Install
 
 - Node.js 24.15.0 and npm 11.12.1
-- Python 3.13.5
+- Python 3.13
 
 ```bash
 npm ci
@@ -75,8 +115,9 @@ npm run playwright:install
 
 ## Provider configuration
 
-Mock is enabled initially. `.env.example` keeps DeepSeek selected and GLM fully
-commented:
+Mock mode is on by default and needs no credentials. Its answers are fixed
+rules for development and testing, and the top bar shows "模拟模型" while it is
+on.
 
 ```env
 ENABLE_MOCK_LLM=true
@@ -92,85 +133,54 @@ DEEPSEEK_MODEL=deepseek-v4-flash
 # GLM_MODEL=glm-5.2
 ```
 
-For DeepSeek, enter `DEEPSEEK_API_KEY` and set `ENABLE_MOCK_LLM=false`. To use
-GLM, comment the DeepSeek provider selection, uncomment the four GLM lines,
-enter `GLM_API_KEY`, and keep Mock disabled. Provider, key, base URL, and model
-are validated at startup; the application never silently falls back to Mock.
-
-`LLM_MAX_OUTPUT_TOKENS` is sent explicitly as `max_tokens`. Omitting it leaves
-the provider's server-side default in force, which is model-dependent and small
-enough to truncate a full PRD mid-document; sending it makes the ceiling a
-configured value, so `finish_reason="length"` reports hitting _this_ limit and
-the generator retries instead of committing a partial document.
+To use a real model, set `ENABLE_MOCK_LLM=false` and fill in the key for the
+selected provider. Configuration is validated at startup and never falls back
+to Mock silently. Set `MODEL_INPUT_PRICE_PER_MILLION` and
+`MODEL_OUTPUT_PRICE_PER_MILLION` to see cost estimates.
 
 ## Run locally
-
-Start one process per terminal:
 
 ```bash
 ./.venv/bin/python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 npm run dev
 ```
 
-Open `http://127.0.0.1:4321`; health is at
-`http://127.0.0.1:8000/api/health`. Conversations, snapshots, and replayable
-events are stored in `data/agentic-prd.sqlite3`. Keep Uvicorn at one worker
-because active workflow tasks and control signals remain process-local. Mock
-Podcast runs score 71.0 in v1 and 88.0 in v2, with v1 carrying one `must_fix`
-per reviewer so the quality gate has something real to hold the run for.
+Open `http://127.0.0.1:4321`. Health is at `http://127.0.0.1:8000/api/health`.
+Keep Uvicorn at one worker: running jobs and SSE subscribers are process-local.
 
-## Test and build
+## Test
 
 ```bash
-npm run format:check
-npm run lint
-npm run typecheck
+npm run lint && npm run typecheck
 npm run test:run
-npm run build
-./.venv/bin/ruff format --check backend
-./.venv/bin/ruff check backend
+npm run test:e2e
+./.venv/bin/ruff format --check backend && ./.venv/bin/ruff check backend
 ./.venv/bin/mypy backend
 ./.venv/bin/python -m pytest -p no:cacheprovider
-npm run test:e2e
-npm run test:e2e:repeat
 ```
 
-`npm run test` is watch mode; use `test:run` for a single pass. The E2E launcher
-uses isolated ports 4331/8011, test-only failure injection, and always cleans up
-its server processes. Real-provider smoke testing is a manual, credentialed
-release check and is not part of default automation.
+All automated tests use the mock model. E2E runs on isolated ports 4331/8011
+with an in-memory database. A real-model smoke test is a manual check that
+needs an approved key and budget.
 
-## Current limitations
+## Limitations
 
-- The backend must run as a **single Uvicorn worker**. Task handles, run locks,
-  pause/resume/cancel signals, and SSE subscriber conditions are process-local,
-  so the application does not scale horizontally.
-- **SQLite is the persistence layer** for this release — no external database,
-  Redis, or queue. Active workflows are not checkpointed: a non-terminal run
-  found at startup is marked `RUN_INTERRUPTED` and is not resumed.
-- **A terminal run cannot be optimized further.** Terminal states do not return
-  to a running state; start a new run instead.
-- **No manual PRD editing.** Content is only produced by the loop; the user
-  influences it through the idea, the quality settings, and the supplementary
-  requirements available while paused.
-- **Export is Markdown only.** No PDF or DOCX.
-- **Real-provider quality and latency depend on the model service.** Scores,
-  document length, wall-clock time, and cost are properties of the configured
-  provider, not of this application. Only Mock mode is deterministic.
-- This build targets local showcase use. Its pinned Astro 4 / Mermaid 10
-  dependency tree carries known upstream advisories, so a public deployment
-  requires those major upgrades as an explicit change first.
+- Prompts have only been verified with the mock model.
+- Single worker, local SQLite, no external queue. A job interrupted by a
+  restart is marked `JOB_INTERRUPTED` and is not resumed.
+- One AI task per project at a time.
+- Deleted projects are soft-deleted; there is no automatic cleanup.
+- Old V2 runs cannot be converted into V3 projects.
+- Markdown export only; no PDF or DOCX import or export.
+- The pinned Astro 4 / Mermaid 10 dependencies carry known upstream advisories;
+  this build is for local use.
 
 ## Troubleshooting
 
-- Port already in use: stop the process using 4321/8000; E2E separately needs
-  4331/8011.
-- Browser executable missing: run `npm run playwright:install`.
-- Startup reports a missing key: either enable Mock or configure the key for
-  the selected provider.
-- Frontend cannot reach the API: verify both processes, `/api/health`,
+- Port in use: free 4321/8000 (E2E also needs 4331/8011).
+- Frontend cannot reach the API: check both processes, `/api/health`,
   `PUBLIC_API_BASE_URL`, and `FRONTEND_ORIGINS`.
-- A run was interrupted by a restart: its persisted snapshot is retained and
-  marked failed with `RUN_INTERRUPTED`; start a new run to retry it.
-- A run failed while generating a later version: the versions already committed
-  are still selectable, and the notice names the version that failed.
+- "This project already has an AI task running": wait for it to finish; each
+  project runs one task at a time.
+- A section failed to generate: the others are kept; retry that section from
+  the document page.

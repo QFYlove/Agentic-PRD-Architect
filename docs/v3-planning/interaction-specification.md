@@ -2,6 +2,8 @@
 
 覆盖页面 01 项目工作台、02 需求探索、03 PRD 编辑器。每节分"布局 / 交互 / 状态 / 原型实现情况"。可运行原型见 `design-preview/v3/`，运行方式见 [design-preview/v3/README.md](../../design-preview/v3/README.md)。
 
+> 状态（2026-11-09）：本文针对 v3 原型。正式应用按 v4 方案实现（[design-proposal.md](design-proposal.md)）：每个项目只有"需求"和"文档"两个空间；Brief、大纲、PRD 在文档空间内切换；审查、来源、质量在右侧按需打开；Brief 页有"检查 Brief"，PRD 全部章节完成后才能审查全文。
+
 ## 0. 全局框架
 
 - **顶栏**（56px，吸顶）：Logo、上下文（工作台显示项目数；项目内显示项目编号与名称）、阶段导航、保存状态、用户。

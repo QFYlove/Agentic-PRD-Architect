@@ -1,8 +1,32 @@
 # Agentic PRD Architect 架构记录
 
-> 最近更新：2026-08-21
+> 最近更新：2026-11-09
 >
-> 范围：已确认的系统边界、实现基线和不可随意变更的架构决策
+> 当前主流程是 V3 项目工作台（第 0 节）。第 1～11 节记录 V2 单次运行流程的架构，V2 作为只读历史保留在 `/runs` 和 `/api/runs`，这些约束对 V2 代码仍然有效。
+> V3 的详细设计见 `docs/v3-planning/`，模块地图见 `docs/product-audit/architecture-map.md`。
+
+## 0. V3 项目工作台
+
+**组成**：Astro 页面 `/` 挂载 `src/v3/App`；FastAPI 在 `/api/v3` 挂载 `backend/v3/api.py`。路由只做参数校验，业务在 `explore`（项目、对话、基线、Analyst）、`document`（Brief、大纲、逐章生成、编辑、影响分析、版本、导出）、`review`（四个 Reviewer 与 Aggregator）、`optimize`（修改提案）、`quality`（四项指标）中。
+
+**执行单元**：每次模型调用是一个 Job（`backend/v3/jobs.py`），记录状态、Provider、模型、Token、费用、Trace ID 和结构化错误。事件写入 `v3_job_events`（`section_delta` 只在内存），前端按序号断线续传。重试、截断不重试和错误分类复用 `backend/failures.py`。同一项目同时只允许一个 Job（409）。
+
+**模型访问**：`backend/v3/llm.py` 的网关接口；真实模型走 `CompatibleGateway`（复用 V2 的 OpenAI 兼容适配器），开发和测试走 `MockGateway`。结构化输出先用 Pydantic 校验，再由服务层按项目真实数据校验。
+
+**存储**：同一个 SQLite 文件里的 `v3_*` 表。`MIGRATIONS` 只追加，记录在 `v3_schema_migrations`；第一次迁移前用 SQLite backup 接口复制到 `data/backups/`；`rollback_v3()` 只删 V3 表。V2 的 `runs` / `run_events` 不读不写。
+
+**不可变决策**：
+
+- 用户触发 AI，AI 执行一次就停；没有自动循环。
+- AI 只能把需求条目标为推断 / 建议 / 假设 / 待确认；确认和否定只来自用户接口。标为用户来源的原话必须在用户消息中逐字出现。
+- Brief 由代码组装并冻结；PRD 只读取已确认的 Brief。
+- 四个 Reviewer 独立并行，只能提本角色类别的意见；分数由后端按维度权重计算，四个分开显示，不做平均。
+- Optimizer 只读取已采纳的意见，只产生提案；应用提案按章节 `row_version` 校验。
+- 影响分析、Stale 标记和质量指标都是确定性代码，格式修改不触发。
+- 版本只追加；审查结果指向审查时实际读到的版本。
+- 内部编号只存在结构化字段里，不进入 Brief、PRD 和导出正文。
+
+# V2 单次运行流程（只读历史）
 
 ## 1. 系统组成
 

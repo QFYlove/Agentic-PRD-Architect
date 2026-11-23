@@ -7,6 +7,8 @@
 
 **产品阶段：** V3.0 产品重构规划
 
+> 实施说明（2026-11-09）：本文按原稿保留。MVP 实施时，审查在第 3.9 节的 Tech、UX、Biz 之外增加了 Product Reviewer，共四个独立 Reviewer，分数分开显示、不做平均。实施状态见 [memory-bank/progress.md](../memory-bank/progress.md)。
+
 **产品类型：** AI Product Thinking & PRD Workspace
 
 ---
