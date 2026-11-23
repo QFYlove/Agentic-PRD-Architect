@@ -1,6 +1,6 @@
 # V3.0 技术影响分析
 
-本文件说明 V3.0 对现有代码、数据结构和接口的影响。所有改动均**尚未实施**。现状依据见 [gap-analysis.md](gap-analysis.md)。
+本文件是开发前写的 V3.0 技术影响分析。**状态（2026-11-09）：已按本文实施**，实际实现与建议的差异：评审为四个 Reviewer（新增 Product）；Brief 的内部编号存在 `item_codes`，不写入正文；新增 `v3_reviews`、`v3_proposals`、`v3_proposal_changes`、`v3_finding_events`、`v3_counters` 表；Finding 增加 `brief_version`（迁移 2）。现状依据见 [gap-analysis.md](gap-analysis.md)，实际模块见 [architecture-map.md](../product-audit/architecture-map.md)。
 
 ## 1. 数据模型建议
 

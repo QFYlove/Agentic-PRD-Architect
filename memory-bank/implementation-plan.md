@@ -1,5 +1,7 @@
 # Agentic PRD Architect 实施计划
 
+> **历史文档**：本文是 V1 的实施计划，已全部完成。V3 的计划和实施状态见 [implementation-roadmap.md](../docs/v3-planning/implementation-roadmap.md)，当前进度见 [progress.md](progress.md)。
+
 > 依据：memory-bank/design-document.md、memory-bank/tech-stack.md  
 > 目标读者：负责逐步实现本项目的 AI 开发者  
 > 执行原则：小步实现、测试先行、逐级验收、禁止跨阶段堆叠改动

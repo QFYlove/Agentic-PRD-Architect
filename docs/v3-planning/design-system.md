@@ -1,6 +1,6 @@
 # V3.0 视觉设计规范
 
-- 状态：草案，基于可运行原型 `design-preview/v3/`，待用户确认方向
+- 状态：**已被取代**。本文基于 `design-preview/v3/` 的第一稿方向。正式应用采用的是 v4 方案（[design-proposal.md](design-proposal.md)），样式在 `src/v3/styles/`（tokens 来自 `design-preview/v4/`）。
 - 方向：A Swiss Editorial（基础）+ C Tactical Flat Design（表达）
 - 实现参考：`design-preview/v3/src/styles/tokens.css`、`base.css`、`shell.css`
 

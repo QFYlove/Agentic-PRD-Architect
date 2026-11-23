@@ -1,5 +1,7 @@
 # Agentic PRD Architect 技术栈说明
 
+> **历史文档**：本文是 V1 的技术选型基线。V3 沿用 Astro 4 + React 18 + FastAPI + SQLite + OpenAI 兼容 SDK，变化有：V3 不使用 LangGraph（评审并行用 `asyncio.gather`），V3 页面不使用 Tailwind、Recharts 和 Lucide 图标，样式在 `src/v3/styles/`。当前架构见 [architecture.md](architecture.md) 第 0 节。
+
 > 文档版本：1.0  
 > 文档状态：技术选型基线  
 > 需求来源：`PRD.md`、`memory-bank/design-document.md`  

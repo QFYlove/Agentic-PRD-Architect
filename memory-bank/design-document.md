@@ -1,5 +1,7 @@
 # Agentic PRD Architect 项目详细设计文档
 
+> **历史文档**：本文是 V1 单次运行流程的设计基线，已被 V3 项目工作台取代，仅供查阅 V2 代码时参考。当前产品见 [PRD.md](../PRD.md)、[product-definition.md](../docs/product-definition.md) 和 [docs/v3-planning/](../docs/v3-planning/)。
+
 > 文档版本：1.0  
 > 文档状态：可进入实现  
 > 需求来源：`PRD.md`  

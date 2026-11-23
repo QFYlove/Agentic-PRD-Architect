@@ -2,6 +2,8 @@
 
 依据：[product-definition.md](../product-definition.md) 第 3、4、7 章；现状见 [gap-analysis.md](gap-analysis.md)。
 
+> 状态（2026-11-09）：已实施。与下文的差异：Reviewer 为四个（Product / UX / Tech / Biz），Product Reviewer 有独立评分维度；四个分数分开显示，不计算综合分；Product Analyst 也可以检查某个 Brief 版本。
+
 ## 1. 架构原则
 
 1. **用户触发，AI 执行一次就停。** 除了探索对话的单轮回复，没有任何 AI 任务会自动接着触发下一个 AI 任务。自动循环（生成 → 评审 → 优化 → 再生成）不再是默认路径。

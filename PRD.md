@@ -1,334 +1,151 @@
 # Agentic PRD Architect — Product Requirements
 
+> Version: V3.0 MVP. The full product definition (Chinese) is
+> [docs/product-definition.md](docs/product-definition.md); this file is the
+> short English summary. The V1/V2 single-run loop spec this file used to hold
+> is in Git history.
+
 ## 1. Objective
 
-**Agentic PRD Architect** turns a brief product idea into a versioned, reviewed PRD,
-showcasing a Generator–Evaluator–Optimizer agentic loop.
+Help a product manager go from a vague idea to a deliverable PRD. The product
+explores the requirements with the user, finds problems in them before any
+document exists, writes the PRD from a confirmed baseline, reviews it from four
+independent angles, and revises only what the user accepts.
 
-The application takes a product idea, generates a draft PRD, critiques it from three
-independent agent perspectives (Tech Lead, UX Designer, Business Strategist), refines
-it through an iterative loop until the quality gate passes or the iteration budget runs
-out, and streams the structured loop progress to the frontend in real time. Hidden
-model reasoning is never exposed.
+### Principles
 
----
+1. The user triggers each AI task; the task runs once and stops.
+2. The user makes every decision. An AI inference never becomes confirmed on
+   its own.
+3. Every requirement and finding keeps its source.
+4. Findings need real evidence. Zero findings is a valid review.
+5. Human edits are never overwritten by the AI.
+6. Only findings the user accepted reach the Optimizer.
+7. No cap on how many rounds the user runs.
+8. No single overall score decides quality.
 
-## 2. Tech Stack & System Architecture
+## 2. Workflow
 
-- **Frontend**: Astro 4.x (SSR) + React 18 + TailwindCSS + Lucide Icons + Mermaid.js
-  (for diagrams inside the generated PRD) + Recharts (radar score chart).
-- **Backend**: Python 3.11+ (pinned to 3.13.5 locally) + FastAPI + LangGraph +
-  OpenAI-compatible SDK adapter. DeepSeek and GLM are supported through configurable
-  Chat Completions endpoints.
-- **Communication**: REST for control, Server-Sent Events for real-time streaming of
-  structured agent events, loop iterations, and partial PRD output. SSE events carry
-  incrementing ids and are replayable.
-- **Persistence**: local SQLite (`data/agentic-prd.sqlite3`) for conversations,
-  snapshots, and replayable events.
-
-### Structure
-
-```text
-agentic-prd-architect/
-├── backend/
-│   ├── main.py              # FastAPI app: REST control APIs + SSE endpoint
-│   ├── workflow.py          # LangGraph loop, Aggregator, quality gate
-│   ├── prompts.py           # System prompts for Generator, Reviewers, Optimizer
-│   ├── schemas.py           # Pydantic models for state, reviews, events
-│   ├── prd_document.py      # Completion sentinel + finish_reason verdicts
-│   ├── run_manager.py       # Atomic commits, control signals, concurrency
-│   ├── run_store.py         # In-memory + SQLite snapshot stores
-│   ├── event_store.py       # Replayable event log with a bounded hot buffer
-│   └── providers/           # Provider protocol, DeepSeek/GLM adapter, Mock
-├── src/
-│   ├── layouts/Layout.astro
-│   ├── pages/index.astro    # Loads the React workspace with client:only
-│   ├── components/          # Workspace, version rail, panels, viewers, charts
-│   ├── hooks/useAgentRun.ts # Snapshot-first restore + EventSource lifecycle
-│   └── lib/                 # Reducer, contracts, diff, outcome/failure text
-├── e2e/                     # Playwright specs
-├── package.json
-└── astro.config.mjs
+```
+Create project → Explore (multi-round) → Requirement baseline → Product Analyst
+→ Product Brief (confirmed snapshot) → Outline → Per-section generation
+→ Human edits → Four reviewers → Finding decisions → Optimisation proposal
+→ Impact analysis → Versions → Markdown export
 ```
 
----
+Entry points: from an idea, from existing requirements, or review an existing
+PRD (pasted Markdown is split into sections and reviewed directly).
 
-## 3. Agentic Loop Architecture & State Machine
+The UI has two spaces per project: **Requirements** (conversation, baseline,
+analyst findings, open items) and **Document** (Brief, outline, PRD, review,
+versions, quality, export).
 
-### 3.1 State Schema Definition (`backend/schemas.py`)
+## 3. Requirement baseline
 
-The shipped models are Pydantic and live in `backend/schemas.py`. Every reviewer
-finding carries a severity, because completion depends on blocking findings and not
-only on the score:
+Twelve groups: positioning, goals, users, problems, scenarios, alternatives,
+solution, features, constraints, assumptions, decisions, open items.
+Positioning, users, problems, and scenarios are the core (P0) groups.
 
-```python
-class FeedbackSeverity(str, Enum):
-    MUST_FIX = "must_fix"
-    SHOULD_FIX = "should_fix"
-    OPTIONAL = "optional"
+Each item has an id, content, group, source (user / AI), status, priority,
+timestamps, revision history, and links. Statuses: Confirmed, Inferred,
+Assumption, Proposed, Open, Rejected. Enforced in the backend:
 
-class FeedbackItem(BaseModel):
-    severity: FeedbackSeverity
-    message: str
+- The AI may only assign Inferred, Assumption, Proposed, or Open.
+- An item attributed to the user must quote the user's own words verbatim;
+  otherwise it is stored as AI-sourced.
+- The AI cannot rewrite a confirmed item; it can only propose a linked one.
+- A rejected item is not re-added.
 
-class RoleReview(BaseModel):
-    role: ReviewRole                    # tech | ux | biz
-    score: int                          # 0-100
-    feedback: list[FeedbackItem]
+Internal item codes (POS-01, USR-02 …) are data for linking and tracing. They
+never appear in Brief, PRD, or exported text.
 
-class EvaluationResult(BaseModel):
-    tech: RoleReview
-    ux: RoleReview
-    biz: RoleReview
-    overall_score: float                # server-computed equal-weight average
-    combined_feedback: list[FeedbackItem]
+## 4. Model calls
 
-    def severity_counts(self) -> dict[str, int]: ...
-    @property
-    def must_fix_count(self) -> int: ...
-```
+| Call | Reads | Produces | When |
+|---|---|---|---|
+| Requirement Explorer | Baseline, last 3 rounds, this round's answers | Understanding, new/updated items, 1–3 questions with purpose | Each round |
+| Product Analyst | Baseline or a Brief snapshot | Gap / conflict / scenario / risk / opportunity findings citing items | User clicks "check" |
+| Generator — outline | Confirmed Brief | Sections: title, goal, contents, linked items, dependencies, open points | User request |
+| Generator — section | One outline entry, its items, earlier summaries | Streamed Markdown for that section | After outline is confirmed |
+| Reviewers ×4 | The finished PRD (or a scoped set of sections), the Brief | Summary, risks, dimension scores, findings | User request |
+| Optimizer | Accepted findings with user notes, target sections | ADD / UPDATE / REMOVE / CONSOLIDATE / RETAIN proposals | User request |
 
-`overall_score` is validated against the average the backend computes itself, so a
-model that reports its own total cannot influence the gate. `severity_counts()` and
-`must_fix_count` are derived on demand and never persisted as totals, so the reviewer
-panel, the outcome summary, and the trace cannot disagree about one list of findings.
+The Product Analyst checks requirements before the PRD exists; the Product
+Reviewer checks the PRD. They are separate calls with separate prompts.
 
-`PRDRunState` additionally tracks `versions` (each with its own content, evaluation,
-revision plan, and token usage), `best_version` / `best_score` (the highest-scoring
-version, not the newest), telemetry, and `node_timings`.
+Opportunity findings must state the user problem, the current solution, its
+shortfall, the value, the cost, and the assumptions to validate.
 
-### 3.2 Loop Logic Diagram
+## 5. Review
 
-```text
-[User Input] --> (Node 1: Draft Generator vN)
-                      |
-                      v
-               (Node 2: three independent Reviewers, in parallel)
-                      |
-                      +--- Tech Lead + UX Designer + Biz Strategist
-                      |
-                      v
-            (Node 3: deterministic Aggregator)
-                      |
-                      v
-            [Quality Gate: score >= target AND must_fix == 0]
-                      |
-       +--------------+--------------+
-       | gate passed                 | gate not passed
-       | OR iteration budget spent   | AND budget remains
-       v                             v
-   (Terminal: COMPLETED /     (Node 4: Optimizer -> Revision Plan)
-    MAX_ITERATIONS_REACHED)          |
-                                     +--- Revision Plan back to Generator ---+
-                                                                             |
-                                     +---------------------------------------+
-                                     v
-                           (Re-run Node 1: Regenerate Draft vN+1)
-```
+Four reviewers run in parallel and never see each other's output:
 
-The gate is a conjunction, not a single score check: a run can reach 91 against a
-target of 85 and still be held by one `must_fix` finding. Exhausting the iteration
-budget ends the run as `MAX_ITERATIONS_REACHED`, which is a normal ending and not a
-failure; the outcome panel then reports the unmet target alongside the best version,
-which is frequently not the last one.
+- **Product**: problem definition, user fit, solution soundness, feature
+  necessity, MVP scope, priority, business-logic completeness, traceability,
+  alternatives.
+- **UX**: user flows, interaction, page states, exceptions, feedback, recovery.
+- **Tech**: feasibility, data, interfaces, state machines, performance,
+  security, reliability, engineering risk.
+- **Biz**: positioning, user value, differentiation, business model, cost,
+  resources, operations and compliance risk.
 
----
+Each finding has an id, reviewer, severity (`must_fix` / `should_fix` /
+`optional`), title, category, section, evidence, problem, cause, impact,
+recommendation, confidence, related items, and related sections. Findings
+outside a reviewer's own categories are dropped.
 
-## 4. Prompts Specification (`backend/prompts.py`)
+**Scoring.** Each reviewer scores four weighted dimensions 1–5; the backend
+computes `Σ(score / 5 × weight) × 100`. Scores are shown per reviewer and
+never averaged. Rubric version `v3-2026-11`.
 
-### Generator Agent Prompt
+**Aggregator (code).** Merges the same problem across reviewers, matches
+findings to existing project findings so ids stay stable, keeps rejected
+findings rejected, applies re-verification results, and lowers unsupported
+`must_fix` findings.
 
-> You are a Principal Product Manager. Generate a structured, professional PRD in
-> Markdown for the given idea.
-> If a Revision Plan is provided, address every item in it explicitly.
-> Structure required:
->
-> 1. Product Overview & Core Goal
-> 2. Key User Stories & Happy Path
-> 3. Technical Constraints & API Contracts
-> 4. Edge Cases, Failures, and Recovery Flows (Loading, Empty, Error, Timeout)
-> 5. Success Metrics (North Star Metric & Counter-metrics)
+**Finding lifecycle.** Open, Accepted, Modified, Rejected, Deferred, Resolved,
+Stale. Users set the first five; Resolved and Stale come from checks.
 
-Document Composition Rules are part of the Generator prompt: GFM tables for
-comparisons and contracts, and `mermaid` blocks limited to the diagram types the
-renderer supports (`flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `mindmap`,
-`erDiagram`). The final line of the document must be the completion sentinel; it is
-stripped before display and download, and its absence rejects the attempt.
+## 6. Editing, optimisation, impact
 
-### Reviewer Agent Prompts (structured output, one prompt per role)
+- Sections are edited as Markdown with optimistic locking (409 on conflict).
+  A human-edited section is marked `human`.
+- The Optimizer only produces proposals. The user applies all or some of them;
+  a section changed after the proposal is skipped, not overwritten.
+- Saving a section classifies the change (format, description, feature, rule,
+  positioning, constraint). Formatting changes do nothing; others mark related
+  findings stale and flag dependent sections for a scoped recheck.
 
-The three reviewers run as independent nodes with isolated prompts, not as one
-"panel" call:
+## 7. Versions, quality, export
 
-> 1. **Tech Lead**: missing API details, concurrency risks, scaling bottlenecks, data
->    sync issues.
-> 2. **UX Designer**: missing empty states, network latency handling,
->    reverse/cancellation flows, error messaging.
-> 3. **Biz Strategist**: unclear KPIs, missing guardrail metrics, undefined user value.
+- Versions are append-only and linear, with author, reason, related findings,
+  and section-level diffs. A review saves a version first if the text changed,
+  so every review result points at what it read.
+- Four quality views, all computed by code: document quality, requirement
+  maturity, implementation readiness, open risks and blockers. No data means
+  no number.
+- Markdown export removes internal anchors, markers, and requirement codes,
+  and keeps codes the user typed themselves.
 
-Each returns a score (0-100) and a list of findings, where every finding is tagged
-`must_fix`, `should_fix`, or `optional`. Only `must_fix` gates completion. A reviewer
-does not report an overall score; the Aggregator computes it.
+## 8. Facts and assumptions
 
-### Optimizer Agent Prompt
+Figures that drive a decision are labelled user input, confirmed, assumption,
+suggestion, or to be confirmed. The system never invents research data,
+market size, pilot data, costs, conversion, retention, or business metrics.
 
-Consumes the combined findings and emits a structured Revision Plan (issue, required
-change, target section, priority, source roles) that the next Generator pass must
-work through item by item. It does not rewrite the document itself.
+## 9. Architecture
 
----
+- FastAPI backend, V3 in `backend/v3/` under `/api/v3`; V2 `/api/runs` kept as
+  read-only history.
+- Astro + React frontend in `src/v3/`; the V2 dashboard is at `/runs`.
+- SQLite with `v3_*` tables, numbered migrations, and a pre-migration backup.
+- One Job per model call, durable job events, SSE replay.
+- DeepSeek / GLM through an OpenAI-compatible adapter; a deterministic mock
+  for development and tests.
 
-## 5. Implementation Notes
+## 10. Out of scope for the MVP
 
-### Backend (`backend/`)
-
-1. `requirements.txt` pins `fastapi`, `uvicorn`, `langgraph`, `openai`, `pydantic`,
-   `pydantic-settings`, `sse-starlette`, `python-dotenv`. The OpenAI SDK is used as an
-   OpenAI-compatible client for DeepSeek and GLM.
-2. `workflow.py` builds the LangGraph workflow: Generator, three independent Reviewer
-   nodes, deterministic Aggregator, Optimizer.
-3. Control and streaming are separate surfaces, not one streaming POST:
-   - `POST /api/runs` creates a run and returns `202` with the run id and events URL.
-   - `GET /api/runs/{run_id}` returns an atomic snapshot.
-   - `POST /api/runs/{run_id}/pause` | `/resume` | `/cancel` control it.
-   - `GET /api/runs/{run_id}/events` is the SSE stream, with incrementing event ids
-     replayable via `Last-Event-ID`.
-   - `GET /api/runs` lists conversation summaries; `GET /api/health` reports health
-     without exposing keys.
-
-### Frontend (`src/`)
-
-Astro renders the document shell; the React workspace loads with `client:only`. The
-layout is a version rail plus five workspace tabs (`prd` / `review` / `plan` / `diff`
-/ `trace`), of which only `prd` is never disabled:
-
-- Version rail: every version with its score, and the best version marked.
-- `prd`: streamed Markdown via `react-markdown` + `remark-gfm` with `skipHtml`,
-  lazily-loaded Mermaid, and Markdown download.
-- `review`: the three reviewers' scores and findings grouped by severity.
-- `plan`: the Revision Plan for the selected version.
-- `diff`: version comparison in a rendered reading view or a source view.
-- `trace`: the structured event timeline plus per-node timings.
-
-Telemetry (iteration, elapsed time, tokens, estimated cost, Mock status) comes from
-the backend as-is; the frontend does not compute cost.
-
-### Guardrails
-
-1. **Structured output**: a malformed reviewer/optimizer response gets one format
-   repair request; a second failure fails the node rather than guessing scores from
-   loose regex.
-2. **Iteration budget**: a hard stop that ends the run as `MAX_ITERATIONS_REACHED`
-   even when the score is below target.
-3. **Generation completeness**: `finish_reason` and the completion sentinel are both
-   required; output cap, early stop, and service interruption map to three distinct
-   error codes and three distinct messages.
-4. **Failure preservation**: when a later version fails, the versions already
-   committed remain available and the notice names the version that failed.
-5. **Pause**: pausing lets the current node finish and stops after aggregation, before
-   the Optimizer runs, where the user can add supplementary requirements. There is no
-   manual PRD editing.
-
----
-
-## 6. Verification & Test Plan
-
-Test prompt:
-
-> _"Build a micro-subscription feature for a podcast app that lets listeners pay
-> $0.10 per episode."_
-
-Expected behaviour in Mock mode (deterministic):
-
-1. **Iteration 1**: Generator drafts v1; the reviewers score it to an overall 71.0 and
-   each raise one `must_fix`, so the gate holds the run on both counts.
-2. **Iteration 2**: the Optimizer's Revision Plan feeds the next Generator pass; v2
-   scores 88.0 with no `must_fix` remaining, and the gate passes.
-3. **Completion**: the run ends `COMPLETED`; the radar chart and version rail show the
-   v1 → v2 progression, and v2 is the best version.
-
-Automated gates: `pytest`, Vitest, Playwright E2E (isolated ports 4331/8011),
-`astro check`, ESLint, Prettier, Ruff, mypy, and the Astro SSR production build. Real
-provider smoke testing is a manual, credentialed release check.
-
----
-
-## 7. Deliverables Checklist
-
-- [x] FastAPI backend with REST control APIs and a replayable SSE stream.
-- [x] Astro + React frontend with responsive Tailwind design.
-- [x] Live visual rendering of the loop (node status, radar score comparison, version
-      rail, trace).
-- [x] Quality gate on score **and** blocking findings, with the score computed in
-      backend code.
-- [x] Generation completeness protection and preservation of committed versions.
-- [x] SQLite persistence for conversations, snapshots, and replayable events.
-- [x] Markdown export.
-- [ ] Manual real-provider release smoke run (requires credentials).
-
----
-
-## 8. Critical Implementation Details
-
-### 8.1 Backend CORS & Structured Output
-
-- **CORS**: only the configured local origins (`http://localhost:4321` and
-  `http://127.0.0.1:4321` by default) are allowed.
-- **Structured output**: reviewers and the optimizer use the provider's JSON object
-  mode plus Pydantic validation, with a single format repair on failure.
-- **Mock mode**: `ENABLE_MOCK_LLM` selects the Mock provider, which runs through the
-  same LangGraph, RunManager, EventStore and SSE path as a real provider. Startup
-  validates provider, key, base URL and model; the application never silently falls
-  back to Mock.
-- **Output cap**: `LLM_MAX_OUTPUT_TOKENS` is sent explicitly as `max_tokens`, so
-  `finish_reason="length"` reports a configured ceiling rather than an unknown
-  provider default.
-
-### 8.2 Frontend Dependencies & SSR Directives
-
-- `package.json` includes `react-markdown`, `remark-gfm`, `mermaid`, `recharts`,
-  `lucide-react`.
-- `src/pages/index.astro` mounts the workspace with `client:only="react"` so
-  browser-only code never runs during SSR.
-- Mermaid is imported inside the effect that renders a diagram, so a PRD without
-  diagrams never downloads it. It runs with `startOnLoad: false`,
-  `securityLevel: "strict"` and `htmlLabels: false`, and falls back to the diagram
-  source when a definition does not parse.
-
-### 8.3 SSE Wire Format
-
-The backend emits standard SSE frames with an id, an event name, and JSON data:
-
-```text
-id: 17
-event: review_completed
-data: {"run_id": "...", "version": 1, "role": "tech", ...}
-```
-
-Heartbeats are a subscription-layer signal: they carry no id and are not replayable.
-Business events do carry replayable ids; a client resumes from the larger of its query
-cursor and `Last-Event-ID`, and a client that has fallen too far behind recalibrates
-from an atomic snapshot instead. `prd_delta` exists only on the live path and is never
-persisted; `prd_generated` carries the full body.
-
----
-
-## 9. Out of Scope
-
-- Horizontal scaling. The backend runs as a single Uvicorn worker: task handles, run
-  locks, pause/resume/cancel signals, and SSE subscriber conditions are process-local.
-- External datastores. Persistence is local SQLite only — no external database, Redis,
-  or queue. Active workflows are not checkpointed: a non-terminal run found at startup
-  is marked `RUN_INTERRUPTED` and is not resumed.
-- Continuing a terminal run. Terminal states do not return to a running state; start a
-  new run instead.
-- Manual PRD editing. Content is only produced by the loop; the user influences it
-  through the idea, the quality settings, and the supplementary requirements available
-  while paused.
-- Export formats beyond Markdown. No PDF or DOCX.
-- Deterministic quality or latency with a real provider. Scores, document length,
-  wall-clock time, and cost are properties of the configured model service. Only Mock
-  mode is deterministic.
-- Public deployment on the current dependency tree. The pinned Astro 4 / Mermaid 10
-  tree carries known upstream advisories, so a public deployment requires those major
-  upgrades as an explicit change first.
+PDF / DOCX import and export, template libraries, parallel version branches,
+external knowledge sources, user-supplied API keys, team collaboration,
+automatic unlimited model loops, AI suggestions entering requirements without
+user confirmation.
